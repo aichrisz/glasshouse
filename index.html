@@ -1,0 +1,1358 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="GLASSHOUSE is a local, offline inspection of what your browser reveals to any page. Nothing is uploaded."
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>GLASSHOUSE — see what your browser reveals</title>
+    <style>
+      /* ---------------------------------------------------------------
+         Design tokens. Near-black glass with a spectral refraction accent.
+         All visuals are original CSS and canvas: no images, no web fonts.
+         --------------------------------------------------------------- */
+      :root {
+        color-scheme: dark;
+        --ink: #05060a;
+        --ink-2: #0a0d16;
+        --text: #e9edf6;
+        --muted: #9aa5bd;
+        --line: rgba(255, 255, 255, 0.12);
+        --line-strong: rgba(255, 255, 255, 0.28);
+        --glass: rgba(255, 255, 255, 0.045);
+        --glass-2: rgba(255, 255, 255, 0.075);
+        --focus: #7de3ff;
+        --spectral-1: #7de3ff;
+        --spectral-2: #a98cff;
+        --spectral-3: #ff8fd0;
+        --spectral-4: #ffd479;
+        --radius: 16px;
+        --pad: clamp(0.9rem, 3.2vw, 1.4rem);
+        --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+          'Noto Sans', sans-serif;
+        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--ink);
+        color: var(--text);
+      }
+
+      body {
+        min-height: 100svh;
+        font-family: var(--font);
+        font-size: clamp(0.95rem, 0.9rem + 0.3vw, 1.05rem);
+        line-height: 1.55;
+        -webkit-text-size-adjust: 100%;
+        text-rendering: optimizeLegibility;
+        overflow-x: hidden;
+      }
+
+      /* The canvas sits behind everything and never captures input. */
+      #backdrop {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        pointer-events: none;
+        display: block;
+      }
+
+      /* A second, purely CSS refraction layer for depth. */
+      body::after {
+        content: '';
+        position: fixed;
+        inset: -20%;
+        z-index: 0;
+        pointer-events: none;
+        opacity: 0.5;
+        background:
+          radial-gradient(38rem 24rem at 12% -6%, rgba(125, 227, 255, 0.16), transparent 70%),
+          radial-gradient(32rem 22rem at 92% 8%, rgba(169, 140, 255, 0.14), transparent 70%),
+          radial-gradient(40rem 26rem at 50% 108%, rgba(255, 143, 208, 0.1), transparent 70%);
+      }
+
+      .shell {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        max-width: 62rem;
+        margin: 0 auto;
+        padding: clamp(1.1rem, 4vw, 2.6rem) var(--pad) 4rem;
+      }
+
+      /* ------------------------------ masthead ------------------------------ */
+      .masthead {
+        padding-top: clamp(0.5rem, 4vw, 2rem);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0 0 1rem;
+        padding: 0.3rem 0.7rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--glass);
+        color: var(--muted);
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+
+      .eyebrow .dot {
+        width: 0.45rem;
+        height: 0.45rem;
+        border-radius: 50%;
+        background: var(--spectral-1);
+        box-shadow: 0 0 0.6rem var(--spectral-1);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.3rem, 13vw, 5.5rem);
+        line-height: 0.92;
+        font-weight: 800;
+        letter-spacing: -0.035em;
+        /* Spectral wordmark with a solid fallback colour underneath. */
+        color: var(--text);
+        background: linear-gradient(
+          104deg,
+          var(--spectral-1) 0%,
+          var(--spectral-2) 34%,
+          var(--spectral-3) 62%,
+          var(--spectral-4) 100%
+        );
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      @supports not ((background-clip: text) or (-webkit-background-clip: text)) {
+        h1 {
+          background: none;
+          -webkit-text-fill-color: currentColor;
+        }
+      }
+
+      .lede {
+        margin: 1.1rem 0 0;
+        max-width: 46ch;
+        color: var(--muted);
+        font-size: clamp(1rem, 0.95rem + 0.5vw, 1.2rem);
+      }
+
+      .lede strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ------------------------------ panels ------------------------------ */
+      .panel {
+        margin-top: clamp(1.2rem, 4vw, 2rem);
+        padding: var(--pad);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, var(--glass-2), var(--glass));
+        backdrop-filter: blur(14px) saturate(130%);
+        -webkit-backdrop-filter: blur(14px) saturate(130%);
+      }
+
+      .panel > h2 {
+        margin: 0 0 0.4rem;
+        font-size: 1.05rem;
+        letter-spacing: -0.01em;
+      }
+
+      .panel > h2 + p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .fine {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      code,
+      .mono {
+        font-family: var(--mono);
+        font-size: 0.86em;
+      }
+
+      /* ------------------------------ controls ------------------------------ */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 1rem;
+      }
+
+      .btn {
+        flex: 1 1 auto;
+        min-width: 9.5rem;
+        min-height: 2.9rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        padding: 0.6rem 1rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: var(--glass-2);
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        font-size: 0.92rem;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+      }
+
+      .btn:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.13);
+        border-color: rgba(255, 255, 255, 0.42);
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: progress;
+      }
+
+      .btn-primary {
+        border-color: rgba(125, 227, 255, 0.6);
+        background: linear-gradient(135deg, rgba(125, 227, 255, 0.22), rgba(169, 140, 255, 0.22));
+      }
+
+      .btn-quiet {
+        color: var(--muted);
+      }
+
+      progress {
+        width: 100%;
+        height: 0.45rem;
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.09);
+        overflow: hidden;
+      }
+
+      progress::-webkit-progress-bar {
+        background: rgba(255, 255, 255, 0.09);
+        border-radius: 999px;
+      }
+
+      progress::-webkit-progress-value {
+        background: linear-gradient(90deg, var(--spectral-1), var(--spectral-2));
+        border-radius: 999px;
+      }
+
+      progress::-moz-progress-bar {
+        background: linear-gradient(90deg, var(--spectral-1), var(--spectral-2));
+        border-radius: 999px;
+      }
+
+      .scan-progress {
+        margin: 1.1rem 0 0.5rem;
+      }
+
+      .status {
+        margin: 0;
+        min-height: 1.6em;
+        color: var(--text);
+        font-size: 0.9rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .optin {
+        display: flex;
+        gap: 0.6rem;
+        align-items: flex-start;
+        margin: 1rem 0 0;
+        padding-top: 0.9rem;
+        border-top: 1px solid var(--line);
+        font-size: 0.9rem;
+      }
+
+      .optin input {
+        flex: 0 0 auto;
+        width: 1.15rem;
+        height: 1.15rem;
+        margin-top: 0.2rem;
+        accent-color: var(--spectral-2);
+      }
+
+      .optin label {
+        cursor: pointer;
+      }
+
+      .optin .fine {
+        display: block;
+        margin-top: 0.2rem;
+      }
+
+      /* ------------------------------ score ------------------------------ */
+      .score-headline {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin: 1rem 0 0.2rem;
+      }
+
+      .score-figure {
+        font-size: clamp(2.6rem, 12vw, 3.8rem);
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+        background: linear-gradient(120deg, var(--spectral-1), var(--spectral-2) 55%, var(--spectral-3));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        color: var(--text);
+      }
+
+      .score-outof {
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .score-band {
+        margin: 0 0 1rem;
+        max-width: 52ch;
+      }
+
+      .cats {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+
+      .cats caption {
+        text-align: left;
+        padding-bottom: 0.5rem;
+      }
+
+      .cats th,
+      .cats td {
+        padding: 0.5rem 0.4rem;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        font-weight: 500;
+      }
+
+      .cats thead th {
+        color: var(--muted);
+        font-size: 0.74rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .cats td {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        width: 4.5rem;
+      }
+
+      .formula {
+        margin: 0.9rem 0 0;
+        padding: 0.7rem 0.8rem;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        overflow-wrap: anywhere;
+        color: var(--muted);
+      }
+
+      /* ------------------------------ signals ------------------------------ */
+      .signals {
+        list-style: none;
+        margin: 1rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.7rem;
+      }
+
+      .signal {
+        padding: 0.9rem 1rem;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--line-strong);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .signal[data-status='ok'] {
+        border-left-color: var(--spectral-1);
+      }
+
+      .signal[data-status='unsupported'] {
+        border-left-color: rgba(255, 255, 255, 0.3);
+      }
+
+      .signal[data-status='denied'] {
+        border-left-color: var(--spectral-2);
+      }
+
+      .signal[data-status='error'] {
+        border-left-color: var(--spectral-4);
+      }
+
+      .signal-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.4rem;
+      }
+
+      .signal-title {
+        margin: 0;
+        font-size: 0.99rem;
+        letter-spacing: -0.01em;
+      }
+
+      .badge {
+        margin: 0;
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 0.74rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+
+      .signal-value {
+        margin: 0.5rem 0 0.35rem;
+        overflow-wrap: anywhere;
+        color: var(--text);
+      }
+
+      .signal-meta {
+        margin: 0;
+      }
+
+      .guidance {
+        margin-top: 0.6rem;
+        border-top: 1px solid var(--line);
+        padding-top: 0.55rem;
+      }
+
+      .guidance summary {
+        cursor: pointer;
+        color: var(--spectral-1);
+        font-size: 0.85rem;
+        font-weight: 600;
+      }
+
+      .guidance p {
+        margin: 0.6rem 0 0;
+        font-size: 0.9rem;
+        color: var(--muted);
+        max-width: 60ch;
+      }
+
+      .guidance .mitigation strong {
+        color: var(--text);
+      }
+
+      /* --------------------------- comparison, lists --------------------------- */
+      .changes,
+      .limits {
+        margin: 0.8rem 0 0;
+        padding-left: 1.15rem;
+        display: grid;
+        gap: 0.45rem;
+        font-size: 0.9rem;
+      }
+
+      .changes li {
+        overflow-wrap: anywhere;
+      }
+
+      .limits li {
+        color: var(--muted);
+        max-width: 62ch;
+      }
+
+      .stored {
+        margin: 0.9rem 0 0.8rem;
+        display: grid;
+        gap: 0.3rem;
+        font-size: 0.9rem;
+      }
+
+      .stored dt {
+        font-weight: 600;
+      }
+
+      .stored dd {
+        margin: 0 0 0.6rem;
+        color: var(--muted);
+        max-width: 62ch;
+      }
+
+      /* ------------------------------ a11y ------------------------------ */
+      a,
+      button {
+        color: inherit;
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 3px;
+        border-radius: 6px;
+      }
+
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
+        }
+      }
+
+      @media (prefers-contrast: more), (forced-colors: active) {
+        :root {
+          --line: rgba(255, 255, 255, 0.5);
+          --muted: #d7ddea;
+          --glass: transparent;
+          --glass-2: transparent;
+        }
+        .panel {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+        body::after,
+        #backdrop {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="backdrop" aria-hidden="true"></canvas>
+
+    <div class="shell">
+      <header class="masthead">
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Local inspection</p>
+        <h1>GLASSHOUSE</h1>
+        <p class="lede">
+          Every page you open can read more about your device than you might expect. GLASSHOUSE
+          asks your browser the same questions a tracking script would, then
+          <strong>explains each answer and stops there</strong>. Everything happens on this device.
+        </p>
+      </header>
+
+      <section class="panel" aria-labelledby="boundary-heading">
+        <h2 id="boundary-heading">The privacy boundary</h2>
+        <p>
+          No uploads, no analytics, no cookies set by this page, no external fonts or images, and no
+          network requests after the page has loaded. It keeps working with the network switched off.
+        </p>
+      </section>
+
+      <main id="report">
+        <section class="panel" aria-labelledby="scan-heading">
+          <h2 id="scan-heading">Inspection</h2>
+          <p>
+            Each probe below runs in this page, one at a time. Nothing leaves your device, and
+            nothing asks you for a permission.
+          </p>
+
+          <p class="scan-progress">
+            <label class="visually-hidden" for="scan-progress">Inspection progress</label>
+            <progress id="scan-progress" max="100" value="0"></progress>
+          </p>
+          <p id="scan-status" class="status" role="status" aria-live="polite">Preparing…</p>
+
+          <div class="controls">
+            <button type="button" id="rerun" class="btn btn-primary">
+              <span aria-hidden="true">↻</span> Run again
+            </button>
+            <button type="button" id="export-report" class="btn">
+              <span aria-hidden="true">↓</span> Save JSON report
+            </button>
+            <button type="button" id="reset-data" class="btn btn-quiet">
+              <span aria-hidden="true">✕</span> Delete local data
+            </button>
+          </div>
+
+          <p class="optin">
+            <input type="checkbox" id="include-raw" />
+            <label for="include-raw">
+              Include the raw observed values in the saved report.
+              <span class="fine">
+                Leave this off and the file keeps only probe names, statuses, detail grades and
+                points — enough to audit the score, not enough to describe your device.
+              </span>
+            </label>
+          </p>
+        </section>
+
+        <section class="panel" id="score-panel" aria-labelledby="score-heading" hidden>
+          <h2 id="score-heading">Exposure surface</h2>
+          <p>
+            A transparent breadth measure, not an identity claim. Every point below is traceable to a
+            probe weight in <code>core.mjs</code>.
+          </p>
+          <div id="score-body"></div>
+        </section>
+
+        <section class="panel" id="signals-panel" aria-labelledby="signals-heading">
+          <h2 id="signals-heading">Signals</h2>
+          <p>What each probe read, what it means, and what you can do about it.</p>
+          <ol id="signals-list" class="signals"></ol>
+        </section>
+
+        <section class="panel" id="compare-panel" aria-labelledby="compare-heading" hidden>
+          <h2 id="compare-heading">Since your last run</h2>
+          <p>
+            Compared against the one snapshot kept in this browser's local storage. Signals that stay
+            the same across runs are the ones that make a device recognisable.
+          </p>
+          <div id="compare-body"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="stored-heading">
+          <h2 id="stored-heading">What this page stores on your device</h2>
+          <dl class="stored">
+            <dt><code>glasshouse.snapshot.v1</code></dt>
+            <dd>
+              The most recent normalised snapshot, kept in this browser's local storage so the next
+              run can show you what changed. One entry only; each run replaces it.
+            </dd>
+            <dt><code>glasshouse.settings.v1</code></dt>
+            <dd>Whether you ticked the raw-values box for exports. Nothing else.</dd>
+          </dl>
+          <p class="fine">
+            No cookies are set by this page. Use <strong>Delete local data</strong> above to remove
+            both keys immediately.
+          </p>
+        </section>
+
+        <section class="panel" aria-labelledby="limits-heading">
+          <h2 id="limits-heading">What this cannot tell you</h2>
+          <ul class="limits">
+            <li>
+              It is not an identity check. GLASSHOUSE never claims how unique or identifiable you
+              are, because that depends on a population it cannot see from your device.
+            </li>
+            <li>
+              The score is a breadth measure of how much this fixed probe set could read. It is not
+              an entropy estimate, a fingerprint, or a security verdict.
+            </li>
+            <li>
+              A low score is not anonymity. Your address, your network, and anything you type are all
+              outside what a page-local inspection can observe.
+            </li>
+            <li>
+              Some browsers deliberately return randomised or coarsened answers. That shows up here
+              as values that change between runs, which is protection working rather than a fault.
+            </li>
+          </ul>
+        </section>
+      </main>
+    </div>
+
+    <script type="module">
+      import * as core from './core.mjs';
+
+      /* -----------------------------------------------------------------
+         Cinematic backdrop: a slow spectral refraction drawn with canvas
+         gradients only. Motion is disabled when the visitor asks for
+         reduced motion, in which case a single static frame is drawn.
+         ----------------------------------------------------------------- */
+      const canvas = document.getElementById('backdrop');
+      const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+
+      function startBackdrop() {
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        let width = 0;
+        let height = 0;
+        let ratio = 1;
+        let raf = 0;
+
+        const resize = () => {
+          ratio = Math.min(2, window.devicePixelRatio || 1);
+          width = canvas.clientWidth;
+          height = canvas.clientHeight;
+          canvas.width = Math.max(1, Math.round(width * ratio));
+          canvas.height = Math.max(1, Math.round(height * ratio));
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        };
+
+        const bands = [
+          { hue: 192, phase: 0.0, speed: 0.00013, spread: 0.42 },
+          { hue: 262, phase: 1.7, speed: 0.00017, spread: 0.34 },
+          { hue: 322, phase: 3.1, speed: 0.00011, spread: 0.38 },
+          { hue: 44, phase: 4.6, speed: 0.00009, spread: 0.3 },
+        ];
+
+        const draw = (time) => {
+          ctx.clearRect(0, 0, width, height);
+          const short = Math.min(width, height);
+
+          for (const band of bands) {
+            const t = time * band.speed + band.phase;
+            const cx = width * (0.5 + 0.42 * Math.cos(t));
+            const cy = height * (0.42 + 0.34 * Math.sin(t * 1.31));
+            const r = short * band.spread * (1.05 + 0.12 * Math.sin(t * 0.7));
+            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
+            gradient.addColorStop(0, `hsla(${band.hue}, 100%, 72%, 0.20)`);
+            gradient.addColorStop(0.55, `hsla(${band.hue + 18}, 95%, 62%, 0.07)`);
+            gradient.addColorStop(1, 'hsla(220, 60%, 10%, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(cx, cy, Math.max(1, r), 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // A single refracted edge, like light bending through a pane.
+          const edge = ctx.createLinearGradient(0, height * 0.2, width, height * 0.8);
+          edge.addColorStop(0, 'hsla(190, 100%, 80%, 0)');
+          edge.addColorStop(0.48, 'hsla(200, 100%, 85%, 0.16)');
+          edge.addColorStop(0.52, 'hsla(280, 100%, 85%, 0.16)');
+          edge.addColorStop(1, 'hsla(320, 100%, 80%, 0)');
+          ctx.strokeStyle = edge;
+          ctx.lineWidth = Math.max(1, short * 0.004);
+          ctx.beginPath();
+          const skew = Math.sin(time * 0.00008) * height * 0.06;
+          ctx.moveTo(-10, height * 0.62 + skew);
+          ctx.lineTo(width + 10, height * 0.38 - skew);
+          ctx.stroke();
+        };
+
+        const loop = (time) => {
+          draw(time);
+          raf = requestAnimationFrame(loop);
+        };
+
+        const apply = () => {
+          cancelAnimationFrame(raf);
+          resize();
+          if (motionQuery.matches) {
+            draw(2400);
+          } else {
+            raf = requestAnimationFrame(loop);
+          }
+        };
+
+        window.addEventListener('resize', apply, { passive: true });
+        motionQuery.addEventListener('change', apply);
+        apply();
+      }
+
+      startBackdrop();
+
+      /* -----------------------------------------------------------------
+         Probe collectors.
+
+         Each collector returns either a plain value for core.mjs to
+         normalize, or `null` when the browser does not expose the signal.
+         Throwing is fine: the runner records it as an error state.
+
+         Rules: bounded work only, no permission prompts, no high-entropy
+         client hints, no network. Collectors do no scoring, no redaction
+         and no comparison — that all lives in the tested core.
+         ----------------------------------------------------------------- */
+
+      const mq = (query) => {
+        try {
+          return matchMedia(query).matches;
+        } catch {
+          return false;
+        }
+      };
+
+      /** FNV-1a, run twice with different offsets, rendered as 16 hex chars. */
+      const digestString = (input) => {
+        const seeds = [0x811c9dc5, 0x01000193];
+        return seeds
+          .map((seed) => {
+            let hash = seed;
+            for (let i = 0; i < input.length; i += 1) {
+              hash ^= input.charCodeAt(i);
+              hash = Math.imul(hash, 0x01000193) >>> 0;
+            }
+            return hash.toString(16).padStart(8, '0');
+          })
+          .join('');
+      };
+
+      const FONT_CANDIDATES = [
+        'Arial',
+        'Arial Narrow',
+        'Bookman Old Style',
+        'Cambria',
+        'Candara',
+        'Consolas',
+        'Courier New',
+        'DejaVu Sans',
+        'Franklin Gothic Medium',
+        'Georgia',
+        'Helvetica Neue',
+        'Impact',
+        'Liberation Serif',
+        'Lucida Grande',
+        'Menlo',
+        'Noto Sans',
+        'Optima',
+        'Palatino Linotype',
+        'Roboto',
+        'Segoe UI',
+        'Tahoma',
+        'Times New Roman',
+        'Trebuchet MS',
+        'Ubuntu',
+        'Verdana',
+      ];
+
+      const collectors = {
+        screen: () => {
+          const s = window.screen;
+          if (!s) return null;
+          return {
+            width: s.width,
+            height: s.height,
+            availWidth: s.availWidth,
+            availHeight: s.availHeight,
+            colorDepth: s.colorDepth,
+            pixelDepth: s.pixelDepth,
+            orientation: s.orientation ? s.orientation.type : null,
+          };
+        },
+
+        viewport: () => ({
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio,
+          outerWidth: window.outerWidth,
+          outerHeight: window.outerHeight,
+        }),
+
+        timezone: () => {
+          const resolved = Intl.DateTimeFormat().resolvedOptions();
+          return {
+            timeZone: resolved.timeZone || null,
+            utcOffsetMinutes: -new Date().getTimezoneOffset(),
+            locale: resolved.locale || null,
+            calendar: resolved.calendar || null,
+            numberingSystem: resolved.numberingSystem || null,
+          };
+        },
+
+        languages: () => {
+          const list = navigator.languages;
+          if (Array.isArray(list) && list.length > 0) return list;
+          return navigator.language ? [navigator.language] : null;
+        },
+
+        ua: () => ({
+          userAgent: navigator.userAgent || null,
+          platform: navigator.platform || null,
+          vendor: navigator.vendor || null,
+          engineHint: describeEngine(navigator.userAgent || ''),
+        }),
+
+        clientHints: () => {
+          // Low-entropy fields only. The high-entropy hint API is never called.
+          const data = navigator.userAgentData;
+          if (!data) return null;
+          return {
+            brands: Array.isArray(data.brands) ? data.brands.map((b) => b.brand) : null,
+            mobile: typeof data.mobile === 'boolean' ? data.mobile : null,
+            platform: data.platform || null,
+          };
+        },
+
+        touch: () => ({
+          maxTouchPoints:
+            typeof navigator.maxTouchPoints === 'number' ? navigator.maxTouchPoints : null,
+          pointer: mq('(pointer: coarse)') ? 'coarse' : mq('(pointer: fine)') ? 'fine' : 'none',
+          anyHover: mq('(any-hover: hover)'),
+          pointerEvents: 'PointerEvent' in window,
+        }),
+
+        cores: () =>
+          typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null,
+
+        memory: () => (typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null),
+
+        canvas: () => {
+          const c = document.createElement('canvas');
+          c.width = 240;
+          c.height = 60;
+          const ctx = c.getContext('2d');
+          if (!ctx) return null;
+
+          ctx.fillStyle = '#0b1020';
+          ctx.fillRect(0, 0, 240, 60);
+          const grad = ctx.createLinearGradient(0, 0, 240, 60);
+          grad.addColorStop(0, '#7de3ff');
+          grad.addColorStop(0.5, '#a98cff');
+          grad.addColorStop(1, '#ffd479');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(60, 30, 26, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.font = '18px system-ui, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.fillText('Glasshouse \u2728\u00e9\u00df', 92, 38);
+
+          const data = c.toDataURL();
+          const pixels = ctx.getImageData(0, 0, 240, 60).data;
+          let sample = '';
+          for (let i = 0; i < pixels.length; i += 4801) sample += pixels[i].toString(16);
+
+          return {
+            digest: digestString(data),
+            textDigest: digestString(
+              [ctx.measureText('Glasshouse').width, ctx.measureText('MMMMM').width].join(':'),
+            ),
+            pixelSample: sample.slice(0, 24) || null,
+            dataLength: data.length,
+          };
+        },
+
+        webgl: () => {
+          const c = document.createElement('canvas');
+          const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+          if (!gl) return null;
+
+          const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+          const extensions = gl.getSupportedExtensions();
+          const value = {
+            vendor: debugInfo
+              ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
+              : gl.getParameter(gl.VENDOR),
+            renderer: debugInfo
+              ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+              : gl.getParameter(gl.RENDERER),
+            version: gl.getParameter(gl.VERSION),
+            shadingLanguage: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+            maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+            extensionCount: Array.isArray(extensions) ? extensions.length : null,
+          };
+
+          const loseContext = gl.getExtension('WEBGL_lose_context');
+          if (loseContext) loseContext.loseContext();
+          return value;
+        },
+
+        fonts: () => {
+          const c = document.createElement('canvas');
+          const ctx = c.getContext('2d');
+          if (!ctx) return null;
+
+          const sample = 'mmmMMMwwiil10OQ';
+          const baseline = {};
+          for (const fallback of ['monospace', 'sans-serif', 'serif']) {
+            ctx.font = `28px ${fallback}`;
+            baseline[fallback] = ctx.measureText(sample).width;
+          }
+
+          const found = [];
+          for (const name of FONT_CANDIDATES) {
+            for (const fallback of ['monospace', 'sans-serif', 'serif']) {
+              ctx.font = `28px "${name}", ${fallback}`;
+              if (Math.abs(ctx.measureText(sample).width - baseline[fallback]) > 0.5) {
+                found.push(name);
+                break;
+              }
+            }
+          }
+          return found.length > 0 ? found : null;
+        },
+
+        prefs: () => ({
+          prefersReducedMotion: mq('(prefers-reduced-motion: reduce)'),
+          colorScheme: mq('(prefers-color-scheme: dark)')
+            ? 'dark'
+            : mq('(prefers-color-scheme: light)')
+              ? 'light'
+              : 'no-preference',
+          contrast: mq('(prefers-contrast: more)')
+            ? 'more'
+            : mq('(prefers-contrast: less)')
+              ? 'less'
+              : 'no-preference',
+          forcedColors: mq('(forced-colors: active)'),
+          prefersReducedTransparency: mq('(prefers-reduced-transparency: reduce)'),
+        }),
+
+        storage: () => {
+          const readable = (store) => {
+            try {
+              return typeof window[store].length === 'number';
+            } catch {
+              return false;
+            }
+          };
+          return {
+            cookiesEnabled:
+              typeof navigator.cookieEnabled === 'boolean' ? navigator.cookieEnabled : null,
+            localStorage: readable('localStorage'),
+            sessionStorage: readable('sessionStorage'),
+            indexedDB: 'indexedDB' in window && window.indexedDB !== null,
+            storageManager: Boolean(navigator.storage && navigator.storage.estimate),
+          };
+        },
+      };
+
+      /** Presentational only: a rough engine family from the UA string. */
+      function describeEngine(userAgent) {
+        if (/\bFirefox\/|\bGecko\/\d/.test(userAgent)) return 'Gecko';
+        if (/\bEdg\//.test(userAgent)) return 'Blink (Edge)';
+        if (/\bChrome\/|\bChromium\//.test(userAgent)) return 'Blink';
+        if (/\bSafari\//.test(userAgent)) return 'WebKit';
+        return null;
+      }
+
+      /* -----------------------------------------------------------------
+         Runner and rendering. All arithmetic is delegated to core.mjs.
+         ----------------------------------------------------------------- */
+
+      const els = {
+        status: document.getElementById('scan-status'),
+        progress: document.getElementById('scan-progress'),
+        scorePanel: document.getElementById('score-panel'),
+        scoreBody: document.getElementById('score-body'),
+        signalsList: document.getElementById('signals-list'),
+        comparePanel: document.getElementById('compare-panel'),
+        compareBody: document.getElementById('compare-body'),
+        rerun: document.getElementById('rerun'),
+        exportReport: document.getElementById('export-report'),
+        resetData: document.getElementById('reset-data'),
+        includeRaw: document.getElementById('include-raw'),
+      };
+
+      const state = { snapshot: null, score: null, previous: null };
+
+      const STATUS_TEXT = {
+        ok: 'Read',
+        unsupported: 'Not exposed',
+        denied: 'Blocked',
+        error: 'Failed',
+      };
+      const STATUS_MARK = { ok: '\u25c8', unsupported: '\u25cb', denied: '\u2298', error: '\u26a0' };
+      const DETAIL_TEXT = { full: 'full detail', coarse: 'coarse detail', none: 'no detail' };
+
+      const wait = (ms) =>
+        new Promise((resolve) => {
+          if (motionQuery.matches) resolve();
+          else setTimeout(resolve, ms);
+        });
+
+      function readPrevious() {
+        try {
+          const stored = localStorage.getItem(core.STORAGE_KEYS.snapshot);
+          return stored ? JSON.parse(stored) : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function writePrevious(snapshot) {
+        try {
+          localStorage.setItem(core.STORAGE_KEYS.snapshot, JSON.stringify(snapshot));
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      function readSettings() {
+        try {
+          const stored = localStorage.getItem(core.STORAGE_KEYS.settings);
+          return stored ? JSON.parse(stored) : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function writeSettings(settings) {
+        try {
+          localStorage.setItem(core.STORAGE_KEYS.settings, JSON.stringify(settings));
+        } catch {
+          /* storage may be blocked; the page works without it */
+        }
+      }
+
+      function signalCard(signal, contribution) {
+        const probe = core.getProbe(signal.id);
+        const item = document.createElement('li');
+        item.className = 'signal';
+        item.dataset.status = signal.status;
+        item.dataset.probe = signal.id;
+
+        const head = document.createElement('div');
+        head.className = 'signal-head';
+
+        const title = document.createElement('h3');
+        title.className = 'signal-title';
+        title.textContent = probe.label;
+
+        const badge = document.createElement('p');
+        badge.className = 'badge';
+        badge.textContent = `${STATUS_MARK[signal.status]} ${STATUS_TEXT[signal.status]}`;
+
+        head.append(title, badge);
+
+        const value = document.createElement('p');
+        value.className = 'signal-value mono';
+        value.textContent = signal.display;
+
+        const meta = document.createElement('p');
+        meta.className = 'fine signal-meta';
+        meta.textContent = [
+          core.CATEGORIES[probe.category].label,
+          DETAIL_TEXT[signal.detail],
+          `${contribution.points} of ${contribution.weight} points`,
+          signal.truncated ? 'list truncated' : null,
+          signal.reason ? `reason: ${signal.reason}` : null,
+        ]
+          .filter(Boolean)
+          .join(' \u00b7 ');
+
+        const guidance = document.createElement('details');
+        guidance.className = 'guidance';
+        const summary = document.createElement('summary');
+        summary.textContent = 'What this means, and what you can do';
+        const what = document.createElement('p');
+        what.textContent = probe.explanation;
+        const doThis = document.createElement('p');
+        doThis.className = 'mitigation';
+        const doLabel = document.createElement('strong');
+        doLabel.textContent = 'Mitigation: ';
+        doThis.append(doLabel, document.createTextNode(probe.mitigation));
+        guidance.append(summary, what, doThis);
+
+        item.append(head, value, meta, guidance);
+        return item;
+      }
+
+      function renderScore(score) {
+        els.scoreBody.replaceChildren();
+
+        const headline = document.createElement('p');
+        headline.className = 'score-headline';
+        headline.innerHTML = '';
+        const figure = document.createElement('span');
+        figure.className = 'score-figure';
+        figure.textContent = `${score.total}`;
+        const outOf = document.createElement('span');
+        outOf.className = 'score-outof';
+        outOf.textContent = ` / ${score.maxTotal} points (${score.percent}%)`;
+        headline.append(figure, outOf);
+
+        const band = document.createElement('p');
+        band.className = 'score-band';
+        band.textContent = `${score.band.label} — ${score.band.summary}`;
+
+        const table = document.createElement('table');
+        table.className = 'cats';
+        const caption = document.createElement('caption');
+        caption.className = 'fine';
+        caption.textContent = 'Points by category, after each category cap is applied.';
+        const thead = document.createElement('thead');
+        thead.innerHTML =
+          '<tr><th scope="col">Category</th><th scope="col">Points</th><th scope="col">Cap</th></tr>';
+        const tbody = document.createElement('tbody');
+        for (const category of score.categories) {
+          const row = document.createElement('tr');
+          const name = document.createElement('th');
+          name.scope = 'row';
+          name.textContent = category.label + (category.capped ? ' (capped)' : '');
+          const points = document.createElement('td');
+          points.textContent = String(category.points);
+          const cap = document.createElement('td');
+          cap.textContent = String(category.cap);
+          row.append(name, points, cap);
+          tbody.append(row);
+        }
+        table.append(caption, thead, tbody);
+
+        const formula = document.createElement('p');
+        formula.className = 'fine formula mono';
+        formula.textContent = score.formula;
+
+        els.scoreBody.append(headline, band, table, formula);
+        els.scorePanel.hidden = false;
+      }
+
+      function renderComparison(diff) {
+        els.compareBody.replaceChildren();
+        if (!diff) {
+          els.comparePanel.hidden = true;
+          return;
+        }
+
+        const summary = document.createElement('p');
+        summary.textContent =
+          diff.changedCount === 0
+            ? `Nothing changed since ${diff.previousCreatedAt || 'the previous run'}. Every signal that was readable before is readable again, with the same value.`
+            : `${diff.changedCount} signal${diff.changedCount === 1 ? '' : 's'} changed since ${diff.previousCreatedAt || 'the previous run'}.`;
+        els.compareBody.append(summary);
+
+        if (diff.changes.length > 0) {
+          const list = document.createElement('ul');
+          list.className = 'changes';
+          for (const change of diff.changes) {
+            const item = document.createElement('li');
+            item.textContent = `${change.label}: ${change.kind} (${change.before} \u2192 ${change.after})`;
+            list.append(item);
+          }
+          els.compareBody.append(list);
+        }
+
+        const stable = document.createElement('p');
+        stable.className = 'fine';
+        stable.textContent =
+          diff.stable.length > 0
+            ? `Stable across both runs: ${diff.stable.join(', ')}.`
+            : 'No signal was readable and identical in both runs.';
+        els.compareBody.append(stable);
+        els.comparePanel.hidden = false;
+      }
+
+      async function runProbes() {
+        els.signalsList.replaceChildren();
+        els.scorePanel.hidden = true;
+        els.rerun.disabled = true;
+        els.exportReport.disabled = true;
+        els.progress.value = 0;
+        state.previous = readPrevious();
+
+        const raw = [];
+        let index = 0;
+        for (const probe of core.PROBE_CATALOG) {
+          index += 1;
+          els.status.textContent = `Probe ${index} of ${core.PROBE_CATALOG.length}: ${probe.label}…`;
+          els.progress.value = Math.round((index / core.PROBE_CATALOG.length) * 100);
+          await wait(150);
+
+          try {
+            raw.push({ id: probe.id, value: collectors[probe.id]() });
+          } catch (error) {
+            raw.push({
+              id: probe.id,
+              status: 'error',
+              reason: error && error.name === 'SecurityError' ? 'denied by browser' : String(error),
+            });
+          }
+
+          const revealed = core.normalizeSignal(raw.at(-1));
+          els.signalsList.append(signalCard(revealed, core.scoreSignal(revealed)));
+        }
+
+        state.snapshot = core.normalizeSnapshot(raw, { createdAt: new Date().toISOString() });
+        state.score = core.scoreSnapshot(state.snapshot);
+
+        renderScore(state.score);
+        renderComparison(core.compareSnapshots(state.previous, state.snapshot));
+        writePrevious(state.snapshot);
+
+        const readable = state.snapshot.signals.filter((s) => s.status === 'ok').length;
+        els.progress.value = 100;
+        els.status.textContent = `Done. ${readable} of ${core.PROBE_CATALOG.length} probes returned a reading. ${state.score.total} of ${state.score.maxTotal} points, ${state.score.band.label}.`;
+        els.rerun.disabled = false;
+        els.exportReport.disabled = false;
+      }
+
+      /* -----------------------------------------------------------------
+         Controls. The export is produced by core.buildReport, which omits
+         raw values unless the visitor has explicitly opted in, and is
+         serialised deterministically so two identical runs match byte for
+         byte. The file is written with a local blob URL: no upload.
+         ----------------------------------------------------------------- */
+
+      function exportReport() {
+        if (!state.snapshot) return;
+        const includeRawValues = els.includeRaw.checked === true;
+        const report = core.buildReport(state.snapshot, { includeRawValues });
+        const json = core.stableStringify(report, 2);
+
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = includeRawValues
+          ? 'glasshouse-report-with-values.json'
+          : 'glasshouse-report-redacted.json';
+        link.rel = 'noopener';
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        els.status.textContent = includeRawValues
+          ? 'Saved a JSON report including the raw observed values.'
+          : 'Saved a JSON report with the observed values omitted.';
+      }
+
+      function resetLocalData() {
+        let removed = 0;
+        for (const key of Object.values(core.STORAGE_KEYS)) {
+          try {
+            localStorage.removeItem(key);
+            removed += 1;
+          } catch {
+            /* nothing to remove if storage is unavailable */
+          }
+        }
+        state.previous = null;
+        els.includeRaw.checked = false;
+        els.compareBody.replaceChildren();
+        els.comparePanel.hidden = true;
+        els.status.textContent = `Deleted ${removed} local key${removed === 1 ? '' : 's'}. The next run will have nothing to compare against.`;
+        els.rerun.focus();
+      }
+
+      els.rerun.addEventListener('click', () => {
+        runProbes();
+      });
+      els.exportReport.addEventListener('click', exportReport);
+      els.resetData.addEventListener('click', resetLocalData);
+      els.includeRaw.addEventListener('change', () => {
+        writeSettings({ ...readSettings(), includeRawValues: els.includeRaw.checked });
+      });
+
+      els.includeRaw.checked = readSettings().includeRawValues === true;
+      runProbes();
+    </script>
+  </body>
+</html>

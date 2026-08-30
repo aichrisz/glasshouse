@@ -265,15 +265,16 @@ function normalizeNumber(input) {
   return Math.round(input * factor) / factor;
 }
 
-/** Normalize any leaf value into a string, finite number, boolean, list or null. */
-function normalizeScalar(input) {
+/** Normalize a bounded leaf value into a string, finite number, boolean, list or null. */
+function normalizeScalar(input, depth = 0) {
+  if (depth > 4) return null;
   if (typeof input === 'string') return normalizeString(input);
   if (typeof input === 'number') return normalizeNumber(input);
   if (typeof input === 'boolean') return input;
   if (Array.isArray(input)) {
     const items = [];
     for (const item of input) {
-      const normalized = normalizeScalar(item);
+      const normalized = normalizeScalar(item, depth + 1);
       if (normalized === null || Array.isArray(normalized)) continue;
       if (!items.includes(normalized)) items.push(normalized);
       if (items.length >= LIMITS.listItems) break;
@@ -746,5 +747,726 @@ export function compareSnapshots(previous, current) {
     changedCount: changes.length,
     changes,
     stable,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+   MIRROR MATCH: importing two previously exported reports and comparing them.
+
+   Everything here is pure and defensive. An imported report is untrusted
+   input, so it is bounded, parsed, structurally validated and re-derived
+   before any of it is trusted. Validation is atomic: either a complete
+   report comes back, or nothing does and every reason is listed.
+   --------------------------------------------------------------------------- */
+
+/**
+ * Conservative bound on an imported report. A genuine GLASSHOUSE export with
+ * raw values is a few kilobytes; 256 KiB leaves generous headroom while making
+ * a hostile or accidental multi-megabyte file a refusal rather than a stall.
+ */
+export const REPORT_IMPORT_LIMITS = Object.freeze({
+  maxBytes: 262144,
+  maxBytesLabel: '256 KiB',
+});
+
+/**
+ * UTF-8 byte length of a string, computed arithmetically so the size bound
+ * does not depend on any platform encoder.
+ */
+export function utf8ByteLength(text) {
+  const input = String(text);
+  let bytes = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const code = input.codePointAt(i);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code <= 0xffff) bytes += 3;
+    else {
+      bytes += 4;
+      i += 1;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * Every reason an import can be refused. Published as data so the interface,
+ * the README and this validator cannot drift apart.
+ */
+export const REPORT_IMPORT_ERROR_CODES = Object.freeze([
+  'not-text',
+  'too-large',
+  'empty',
+  'malformed-json',
+  'not-object',
+  'foreign-report',
+  'unsupported-version',
+  'raw-flag-invalid',
+  'signals-missing',
+  'unknown-probe',
+  'duplicate-probe',
+  'missing-probe',
+  'invalid-status',
+  'invalid-detail',
+  'invalid-weight',
+  'invalid-points',
+  'score-missing',
+  'score-bounds',
+  'score-inconsistent',
+  'category-inconsistent',
+  'raw-values-missing',
+  'raw-values-invalid',
+]);
+
+/** Every rejection carries a stable code and a sentence a reader can act on. */
+function importFailure(errors) {
+  return { ok: false, errors, report: null };
+}
+
+function importError(code, message) {
+  return { code, message };
+}
+
+/** Describe untrusted scalar fields without recursively serialising attacker-controlled data. */
+function describeUntrusted(value) {
+  if (value === null) return 'null';
+  if (value === undefined) return 'missing';
+  if (typeof value === 'string') {
+    const clipped = value.length > 80 ? `${value.slice(0, 80)}…` : value;
+    return JSON.stringify(clipped);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return '[array]';
+  return '[object]';
+}
+
+/**
+ * Parse and validate the text of a previously exported GLASSHOUSE report.
+ *
+ * @param {string} text
+ * @returns {{ok: boolean, errors: Array<{code: string, message: string}>, report: object|null}}
+ */
+export function parseReportText(text) {
+  if (typeof text !== 'string') {
+    return importFailure([
+      importError('not-text', 'That input was not text, so it cannot be a JSON report.'),
+    ]);
+  }
+  if (utf8ByteLength(text) > REPORT_IMPORT_LIMITS.maxBytes) {
+    return importFailure([
+      importError(
+        'too-large',
+        `That file is larger than the ${REPORT_IMPORT_LIMITS.maxBytesLabel} limit for an imported report, so it was not read.`,
+      ),
+    ]);
+  }
+  if (text.trim().length === 0) {
+    return importFailure([importError('empty', 'That file is empty, so there is nothing to read.')]);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return importFailure([
+      importError('malformed-json', 'That file is not valid JSON, so it could not be read.'),
+    ]);
+  }
+
+  return validateReport(parsed);
+}
+
+/**
+ * Validate an already-parsed report object.
+ *
+ * @param {unknown} input
+ * @returns {{ok: boolean, errors: Array<{code: string, message: string}>, report: object|null}}
+ */
+export function validateReport(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return importFailure([
+      importError(
+        'not-object',
+        'A report must be a JSON object. This file holds something else at its root.',
+      ),
+    ]);
+  }
+  if (input.app !== 'GLASSHOUSE') {
+    return importFailure([
+      importError(
+        'foreign-report',
+        'That file does not identify itself as a GLASSHOUSE report, so it was not imported.',
+      ),
+    ]);
+  }
+  if (input.reportVersion !== REPORT_VERSION) {
+    return importFailure([
+      importError(
+        'unsupported-version',
+        `This build reads report version ${REPORT_VERSION} only, and that file declares ${describeUntrusted(input.reportVersion)}.`,
+      ),
+    ]);
+  }
+  if (input.snapshotVersion !== SNAPSHOT_VERSION) {
+    return importFailure([
+      importError(
+        'unsupported-version',
+        `This build reads snapshot version ${SNAPSHOT_VERSION} only, and that file declares ${describeUntrusted(input.snapshotVersion)}.`,
+      ),
+    ]);
+  }
+  if (typeof input.includesRawValues !== 'boolean') {
+    return importFailure([
+      importError(
+        'raw-flag-invalid',
+        'A report must state whether it includes raw values with a true or false flag. Anything else is not treated as consent to read them.',
+      ),
+    ]);
+  }
+
+  if (!Array.isArray(input.signals)) {
+    return importFailure([
+      importError(
+        'signals-missing',
+        'That report has no signals array, so there is nothing to compare.',
+      ),
+    ]);
+  }
+  if (input.signals.length !== PROBE_CATALOG.length) {
+    return importFailure([
+      importError(
+        'signals-missing',
+        `That report must contain exactly ${PROBE_CATALOG.length} published signals.`,
+      ),
+    ]);
+  }
+
+  const errors = [];
+  const seen = new Map();
+  for (const entry of input.signals) {
+    const id = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.id : null;
+    if (typeof id !== 'string' || !PROBE_BY_ID.has(id)) {
+      errors.push(
+        importError(
+          'unknown-probe',
+          `That report contains a signal this build does not recognise: ${describeUntrusted(id)}.`,
+        ),
+      );
+      continue;
+    }
+    if (seen.has(id)) {
+      errors.push(
+        importError('duplicate-probe', `That report lists the probe "${id}" more than once.`),
+      );
+      continue;
+    }
+    seen.set(id, entry);
+  }
+
+  for (const probe of PROBE_CATALOG) {
+    if (!seen.has(probe.id)) {
+      errors.push(
+        importError('missing-probe', `That report is missing the probe "${probe.id}".`),
+      );
+    }
+  }
+
+  if (errors.length > 0) return importFailure(errors);
+
+  // Grades are enumerations, weights are catalog facts, and points are a
+  // published function of status and detail. None of the three is taken on
+  // trust from the file.
+  const gradeErrors = [];
+  for (const probe of PROBE_CATALOG) {
+    const signal = seen.get(probe.id);
+    if (!STATUSES.includes(signal.status)) {
+      gradeErrors.push(
+        importError(
+          'invalid-status',
+          `Probe "${probe.id}" declares the status ${describeUntrusted(signal.status)}, which is not one of ${STATUSES.join(', ')}.`,
+        ),
+      );
+      continue;
+    }
+    const graded = signal.status === 'ok';
+    const allowedDetail = graded ? ['full', 'coarse'] : ['none'];
+    if (!allowedDetail.includes(signal.detail)) {
+      gradeErrors.push(
+        importError(
+          'invalid-detail',
+          `Probe "${probe.id}" is ${signal.status} but declares the detail grade ${describeUntrusted(signal.detail)}; ${allowedDetail.join(' or ')} was required.`,
+        ),
+      );
+      continue;
+    }
+    if (signal.weight !== probe.weight) {
+      gradeErrors.push(
+        importError(
+          'invalid-weight',
+          `Probe "${probe.id}" declares weight ${describeUntrusted(signal.weight)}, but this build weights it ${probe.weight}.`,
+        ),
+      );
+    }
+    const expectedPoints = scoreSignal({ id: probe.id, status: signal.status, detail: signal.detail }).points;
+    if (signal.points !== expectedPoints) {
+      gradeErrors.push(
+        importError(
+          'invalid-points',
+          `Probe "${probe.id}" declares ${describeUntrusted(signal.points)} points, but a ${signal.detail}-detail ${signal.status} reading is worth ${expectedPoints}.`,
+        ),
+      );
+    }
+  }
+  if (gradeErrors.length > 0) return importFailure(gradeErrors);
+
+  const score = input.score;
+  if (!score || typeof score !== 'object' || Array.isArray(score) || !Array.isArray(score.categories)) {
+    return importFailure([
+      importError(
+        'score-missing',
+        'That report has no score block with a categories array, so its total cannot be checked.',
+      ),
+    ]);
+  }
+
+  const expected = scoreSnapshot({
+    signals: PROBE_CATALOG.map((probe) => {
+      const signal = seen.get(probe.id);
+      return { id: probe.id, status: signal.status, detail: signal.detail };
+    }),
+  });
+
+  const boundsErrors = [];
+  if (score.maxTotal !== expected.maxTotal) {
+    boundsErrors.push(
+      importError(
+        'score-bounds',
+        `That report claims a maximum of ${describeUntrusted(score.maxTotal)} points; this build's maximum is ${expected.maxTotal}.`,
+      ),
+    );
+  }
+  if (!Number.isInteger(score.total) || score.total < 0 || score.total > expected.maxTotal) {
+    boundsErrors.push(
+      importError(
+        'score-bounds',
+        `That report's total of ${describeUntrusted(score.total)} is outside the possible range 0 to ${expected.maxTotal}.`,
+      ),
+    );
+  }
+  if (boundsErrors.length > 0) return importFailure(boundsErrors);
+
+  const mathErrors = [];
+  const expectedCategoryIds = new Set(expected.categories.map((category) => category.id));
+  const declaredCategoryIds = score.categories.map((category) =>
+    category && typeof category === 'object' && !Array.isArray(category) ? category.id : null,
+  );
+  if (
+    score.categories.length !== expected.categories.length ||
+    new Set(declaredCategoryIds).size !== declaredCategoryIds.length ||
+    declaredCategoryIds.some((id) => !expectedCategoryIds.has(id))
+  ) {
+    mathErrors.push(
+      importError(
+        'category-inconsistent',
+        'That report must contain each published scoring category exactly once and no unknown categories.',
+      ),
+    );
+  }
+  for (const category of expected.categories) {
+    const declared = score.categories.find((c) => c && c.id === category.id);
+    if (!declared) {
+      mathErrors.push(
+        importError('category-inconsistent', `That report omits the category "${category.id}".`),
+      );
+      continue;
+    }
+    if (declared.cap !== category.cap) {
+      mathErrors.push(
+        importError(
+          'category-inconsistent',
+          `Category "${category.id}" declares a cap of ${describeUntrusted(declared.cap)}; this build caps it at ${category.cap}.`,
+        ),
+      );
+    }
+    if (declared.points !== category.points) {
+      mathErrors.push(
+        importError(
+          'category-inconsistent',
+          `Category "${category.id}" declares ${describeUntrusted(declared.points)} points, but its signals add up to ${category.points}.`,
+        ),
+      );
+    }
+  }
+  if (score.total !== expected.total) {
+    mathErrors.push(
+      importError(
+        'score-inconsistent',
+        `That report's total of ${score.total} does not match the ${expected.total} its own signals add up to.`,
+      ),
+    );
+  }
+  if (score.percent !== expected.percent) {
+    mathErrors.push(
+      importError(
+        'score-inconsistent',
+        `That report's percentage of ${describeUntrusted(score.percent)} does not match the ${expected.percent}% implied by its total.`,
+      ),
+    );
+  }
+  if (
+    !score.band ||
+    typeof score.band !== 'object' ||
+    Array.isArray(score.band) ||
+    score.band.id !== expected.band.id
+  ) {
+    mathErrors.push(
+      importError(
+        'score-inconsistent',
+        `That report's band must be "${expected.band.label}" for ${expected.percent}%.`,
+      ),
+    );
+  }
+  if (mathErrors.length > 0) return importFailure(mathErrors);
+
+  // Exact values are read only when the file declares raw inclusion with a
+  // literal boolean, and only after each value has been put back through the
+  // same normalization a live reading gets. A value that no longer supports
+  // the grade the file claims is a rejection, not a downgrade.
+  const includesRawValues = input.includesRawValues === true;
+  const imported = new Map();
+  if (includesRawValues) {
+    const valueErrors = [];
+    for (const probe of PROBE_CATALOG) {
+      const signal = seen.get(probe.id);
+      if (signal.status !== 'ok') {
+        if (signal.value !== null && signal.value !== undefined) {
+          valueErrors.push(
+            importError(
+              'raw-values-invalid',
+              `Probe "${probe.id}" is ${signal.status}, so it must not carry an observed value.`,
+            ),
+          );
+        }
+        continue;
+      }
+      if (signal.value === null || signal.value === undefined) {
+        valueErrors.push(
+          importError(
+            'raw-values-missing',
+            `That report says it includes raw values, but probe "${probe.id}" has none.`,
+          ),
+        );
+        continue;
+      }
+      const renormalized = normalizeSignal({ id: probe.id, value: signal.value });
+      if (renormalized.status !== 'ok') {
+        valueErrors.push(
+          importError(
+            'raw-values-invalid',
+            `The recorded value for probe "${probe.id}" is not a usable reading.`,
+          ),
+        );
+        continue;
+      }
+      if (renormalized.detail !== signal.detail) {
+        valueErrors.push(
+          importError(
+            'raw-values-invalid',
+            `The recorded value for probe "${probe.id}" grades as ${renormalized.detail} detail, but the report declares ${signal.detail}.`,
+          ),
+        );
+        continue;
+      }
+      imported.set(probe.id, renormalized);
+    }
+    if (valueErrors.length > 0) return importFailure(valueErrors);
+  }
+
+  // Everything below is re-derived from the catalog and from the checked
+  // arithmetic. Labels, categories, weights, caps and bands are never echoed
+  // from the file, so a hand-edited report cannot inject text or inflate a
+  // figure by relabelling itself.
+  const report = {
+    app: 'GLASSHOUSE',
+    reportVersion: REPORT_VERSION,
+    snapshotVersion: SNAPSHOT_VERSION,
+    createdAt: typeof input.createdAt === 'string' ? normalizeString(input.createdAt) : null,
+    includesRawValues: input.includesRawValues === true,
+    redacted: input.includesRawValues !== true,
+    score: {
+      total: expected.total,
+      maxTotal: expected.maxTotal,
+      percent: expected.percent,
+      band: { ...expected.band },
+      categories: expected.categories.map((category) => ({
+        id: category.id,
+        label: category.label,
+        cap: category.cap,
+        points: category.points,
+      })),
+    },
+    signals: PROBE_CATALOG.map((probe) => {
+      const signal = seen.get(probe.id);
+      const reading = imported.get(probe.id) ?? null;
+      return {
+        id: probe.id,
+        label: probe.label,
+        category: probe.category,
+        kind: probe.kind,
+        status: signal.status,
+        detail: signal.detail,
+        weight: probe.weight,
+        points: signal.points,
+        truncated: signal.truncated === true,
+        value: reading ? reading.value : null,
+        display: reading ? reading.display : null,
+        reason:
+          includesRawValues && typeof signal.reason === 'string'
+            ? normalizeString(signal.reason)
+            : null,
+      };
+    }),
+  };
+
+  return { ok: true, errors: [], report };
+}
+
+export const COMPARISON_VERSION = 1;
+
+/**
+ * What a Mirror Match comparison does and does not claim. Printed verbatim in
+ * the interface and in the exported comparison file.
+ */
+export const COMPARISON_SEMANTICS =
+  'A to B comparison of two GLASSHOUSE reports read on this device. Deltas describe how much of ' +
+  'this fixed probe set was readable in each report and in how much detail. They are not a ' +
+  'measure of uniqueness, identifiability or risk, and nothing here compares either report ' +
+  'against any other person or population.';
+
+const EXACT_VALUES_UNAVAILABLE =
+  'At least one of these reports was saved with its observed values redacted, so exact value ' +
+  'changes cannot be shown. The structural comparison below — statuses, detail grades, points ' +
+  'and category totals — is unaffected and remains valid.';
+
+const EXACT_VALUES_AVAILABLE =
+  'Both reports were saved with their observed values included, so exact normalised value ' +
+  'changes are shown alongside the structural comparison.';
+
+function isImportedReport(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value.score || typeof value.score !== 'object') return false;
+  if (!Array.isArray(value.signals) || value.signals.length !== PROBE_CATALOG.length) return false;
+  const ids = new Set(value.signals.map((signal) => signal && signal.id));
+  return PROBE_CATALOG.every((probe) => ids.has(probe.id));
+}
+
+function comparisonSide(report) {
+  return {
+    createdAt: report.createdAt ?? null,
+    includesRawValues: report.includesRawValues === true,
+    redacted: report.includesRawValues !== true,
+    total: report.score.total,
+    maxTotal: report.score.maxTotal,
+    percent: report.score.percent,
+    band: { id: report.score.band.id, label: report.score.band.label },
+  };
+}
+
+/**
+ * Compare two imported reports, A then B.
+ *
+ * Both arguments must be reports returned by `parseReportText`/`validateReport`,
+ * so their arithmetic has already been re-derived. Exact value changes appear
+ * only when both sides explicitly included their observed values.
+ *
+ * @param {object} reportA
+ * @param {object} reportB
+ */
+export function compareReports(reportA, reportB) {
+  if (!isImportedReport(reportA) || !isImportedReport(reportB)) {
+    throw new TypeError('compareReports needs two imported reports');
+  }
+
+  const exactAvailable =
+    reportA.includesRawValues === true && reportB.includesRawValues === true;
+
+  const beforeById = new Map(reportA.signals.map((signal) => [signal.id, signal]));
+  const afterById = new Map(reportB.signals.map((signal) => [signal.id, signal]));
+  const catBefore = new Map(reportA.score.categories.map((c) => [c.id, c]));
+  const catAfter = new Map(reportB.score.categories.map((c) => [c.id, c]));
+
+  const signals = PROBE_CATALOG.map((probe) => {
+    const before = beforeById.get(probe.id);
+    const after = afterById.get(probe.id);
+    const pointsDelta = after.points - before.points;
+    const statusChanged = before.status !== after.status;
+    const detailChanged = before.detail !== after.detail;
+
+    const valueComparison = !exactAvailable
+      ? 'unavailable'
+      : before.status !== 'ok' || after.status !== 'ok'
+        ? 'not-read'
+        : stableStringify(before.value) === stableStringify(after.value)
+          ? 'same'
+          : 'different';
+
+    const changes = [];
+    if (statusChanged) changes.push('status');
+    if (detailChanged) changes.push('detail');
+    if (pointsDelta !== 0) changes.push('points');
+    if (valueComparison === 'different') changes.push('value');
+
+    return {
+      id: probe.id,
+      label: probe.label,
+      category: probe.category,
+      weight: probe.weight,
+      statusBefore: before.status,
+      statusAfter: after.status,
+      statusChanged,
+      detailBefore: before.detail,
+      detailAfter: after.detail,
+      detailChanged,
+      pointsBefore: before.points,
+      pointsAfter: after.points,
+      pointsDelta,
+      exposure: pointsDelta > 0 ? 'increased' : pointsDelta < 0 ? 'decreased' : 'unchanged',
+      changes,
+      changed: changes.length > 0,
+      valueComparison,
+      valueBefore: exactAvailable ? (before.value ?? null) : null,
+      valueAfter: exactAvailable ? (after.value ?? null) : null,
+      displayBefore: exactAvailable ? (before.display ?? null) : null,
+      displayAfter: exactAvailable ? (after.display ?? null) : null,
+    };
+  });
+
+  const categories = Object.entries(CATEGORIES).map(([id, category]) => {
+    const before = catBefore.get(id);
+    const after = catAfter.get(id);
+    return {
+      id,
+      label: category.label,
+      cap: category.cap,
+      before: before.points,
+      after: after.points,
+      delta: after.points - before.points,
+    };
+  });
+
+  const a = comparisonSide(reportA);
+  const b = comparisonSide(reportB);
+
+  return {
+    comparisonVersion: COMPARISON_VERSION,
+    a,
+    b,
+    exactValues: {
+      available: exactAvailable,
+      reason: exactAvailable ? EXACT_VALUES_AVAILABLE : EXACT_VALUES_UNAVAILABLE,
+    },
+    totals: {
+      before: a.total,
+      after: b.total,
+      delta: b.total - a.total,
+      maxTotal: a.maxTotal,
+      percentBefore: a.percent,
+      percentAfter: b.percent,
+      percentDelta: b.percent - a.percent,
+      bandBefore: { ...a.band },
+      bandAfter: { ...b.band },
+      bandChanged: a.band.id !== b.band.id,
+    },
+    categories,
+    signals,
+    summary: {
+      probeCount: signals.length,
+      changedCount: signals.filter((s) => s.changed).length,
+      increased: signals.filter((s) => s.exposure === 'increased').length,
+      decreased: signals.filter((s) => s.exposure === 'decreased').length,
+      unchanged: signals.filter((s) => s.exposure === 'unchanged').length,
+      exactValueChanges: exactAvailable
+        ? signals.filter((s) => s.valueComparison === 'different').length
+        : null,
+    },
+    semantics: COMPARISON_SEMANTICS,
+  };
+}
+
+/** The keys a redacted comparison export removes outright. */
+export const COMPARISON_REDACTED_KEYS = Object.freeze([
+  'valueBefore',
+  'valueAfter',
+  'displayBefore',
+  'displayAfter',
+]);
+
+const COMPARISON_OMITTED_NOTE =
+  'Exact value changes were deliberately omitted from this export. Which signals changed, and ' +
+  'how their status, detail grade and points changed, is kept so the comparison stays auditable ' +
+  'without describing either device.';
+
+const COMPARISON_UNAVAILABLE_NOTE =
+  'No exact value changes exist to export: at least one source report was saved with its ' +
+  'observed values redacted. The structural comparison below is unaffected.';
+
+/**
+ * Build the exportable Mirror Match comparison file.
+ *
+ * Exact values are included only when the caller passes literal `true` and the
+ * comparison actually has exact values available. Otherwise the four value
+ * keys are removed from every signal and the omission is declared.
+ *
+ * @param {object} comparison result of compareReports()
+ * @param {{includeExactValues?: boolean}} [options]
+ */
+export function buildComparisonExport(comparison, options = {}) {
+  if (
+    !comparison ||
+    typeof comparison !== 'object' ||
+    !Array.isArray(comparison.signals) ||
+    !comparison.exactValues
+  ) {
+    throw new TypeError('buildComparisonExport needs a comparison from compareReports');
+  }
+
+  const available = comparison.exactValues.available === true;
+  const includesExactValues = options.includeExactValues === true && available;
+
+  return {
+    app: 'GLASSHOUSE',
+    kind: 'comparison',
+    comparisonVersion: comparison.comparisonVersion,
+    includesExactValues,
+    redaction: {
+      applied: !includesExactValues,
+      removedKeys: includesExactValues ? [] : [...COMPARISON_REDACTED_KEYS],
+      note: includesExactValues
+        ? 'Exact value changes are included at your request.'
+        : available
+          ? COMPARISON_OMITTED_NOTE
+          : COMPARISON_UNAVAILABLE_NOTE,
+    },
+    notice:
+      'Generated locally in the browser by comparing two files you chose. Neither report was ' +
+      'uploaded, transmitted or stored by GLASSHOUSE.',
+    semantics: comparison.semantics,
+    exactValues: {
+      ...comparison.exactValues,
+      reason: includesExactValues
+        ? comparison.exactValues.reason
+        : available
+          ? 'Both source reports contained exact normalized values, but they were deliberately omitted from this export.'
+          : comparison.exactValues.reason,
+    },
+    reports: { a: { ...comparison.a }, b: { ...comparison.b } },
+    totals: { ...comparison.totals },
+    categories: comparison.categories.map((category) => ({ ...category })),
+    signals: comparison.signals.map((signal) => {
+      if (includesExactValues) return { ...signal };
+      const { valueBefore, valueAfter, displayBefore, displayAfter, ...rest } = signal;
+      return { ...rest, valuesOmitted: true };
+    }),
+    summary: { ...comparison.summary },
   };
 }

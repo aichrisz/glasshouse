@@ -3,6 +3,8 @@
 A zero-install, single-page browser inspection. It asks your browser the same
 questions a tracking script would ask, shows you each answer as it arrives,
 explains what the answer reveals and what you can do about it, and then stops.
+It can also compare two reports you saved earlier, so you can see whether a
+setting you changed actually changed anything.
 
 Nothing is uploaded. There is no build step, no dependency, no package manager,
 no service worker and no network request after the document has loaded. Open
@@ -13,7 +15,8 @@ Expected deployment: <https://aichrisz.github.io/glasshouse/>
 - `index.html` — the entire interface: original CSS, a canvas backdrop, and one
   inline ES module that collects the probes and renders the results.
 - `core.mjs` — every deterministic decision: normalization, scoring, report
-  redaction and snapshot comparison. Pure functions, no browser globals.
+  redaction, snapshot comparison and report import/comparison. Pure functions,
+  no browser globals.
 - `verify.mjs` — the test suite and the structural gates. Node built-ins only.
 - `TDD_EVIDENCE.md` — the RED/GREEN log for how this was built.
 
@@ -76,7 +79,6 @@ Read this section before you read your score.
 - **Browsers differ.** Any probe may report `Not exposed by this browser`,
   `Blocked by browser or user settings`, or `Could not be read`. Those are
   first-class outcomes here, not errors to be worked around.
-
 ## Probes
 
 14 probes, grouped into eight scoring categories. Every probe is bounded, needs
@@ -179,6 +181,11 @@ category row shows its cap and flags itself when the cap bit.
 | **Save JSON report** | Writes a report to a local file. Nothing is transmitted |
 | **Include the raw observed values** | Opt-in checkbox controlling whether that file contains the readings themselves |
 | **Delete local data** | Removes both stored keys immediately and clears the comparison panel |
+| **Report A** / **Report B** | Two local file pickers for [Mirror Match](#mirror-match). Nothing is uploaded |
+| **Compare reports** | Compares the two chosen reports in this tab |
+| **Include the exact value changes** | Opt-in checkbox for the saved comparison, effective only when both reports carry values |
+| **Save comparison JSON** | Writes the comparison to a local file, with exact values omitted by default |
+| **Clear imported reports** | Discards both imported reports from memory at once |
 
 Every control is a real `<button>` or labelled `<input>`, reachable and operable
 by keyboard, with a visible focus ring. Progress is a `<progress>` element and
@@ -200,6 +207,8 @@ is set, and the layout is built mobile-first from 360px upward.
 - No permission is ever requested, so no permission prompt can appear.
 - Observations exist in memory and, for one snapshot, in this browser's local
   storage. They are never sent anywhere.
+- Reports you import for [Mirror Match](#mirror-match) are read from your own
+  disk into this tab's memory only. They are never persisted and never sent.
 
 ## Stored data
 
@@ -235,6 +244,136 @@ Redaction is the default, and it is deliberate rather than incidental:
 Only a literal boolean `true` opts in; that is covered by a test, so a truthy
 value such as the string `"true"` cannot silently include your data.
 
+## Mirror Match
+
+**Mirror Match** compares two reports you have already saved. It is the answer to
+"did that setting actually change anything?" — and it runs entirely in the tab,
+against two files you choose from your own disk.
+
+### Workflow
+
+1. Save a report (**Save JSON report**), change something — a browser setting, a
+   privacy extension, a different browser — then save a second report.
+2. Choose the earlier file as **Report A** and the later one as **Report B**.
+3. Press **Compare reports**.
+4. Optionally press **Save comparison JSON** to keep the comparison as a file.
+5. Press **Clear imported reports** to discard both immediately.
+
+The comparison always runs from A to B, so a negative delta means less was
+readable in B than in A. It shows:
+
+- each report's own total, maximum, percentage and band;
+- the total delta and a per-category delta, with category deltas that sum to the
+  total delta;
+- per-signal status, detail-grade and points changes, each classified as
+  `increased`, `decreased` or `unchanged` exposure;
+- exact normalised value changes, but only when both files carry their values.
+
+### Privacy boundary for imports
+
+Imports are strictly local, and this is enforced structurally rather than
+promised:
+
+- Both files are read with the chosen `File` object's own `text()` reader. There
+  is no upload, no `fetch`, and no form submission.
+- Imported reports are **never written to** `localStorage`, session storage,
+  IndexedDB, the cache API or a cookie. They live in one module-scope object in
+  the tab and nowhere else.
+- Because nothing is persisted, a **reload** or a closed tab discards both
+  imports. There is nothing to delete afterwards.
+- `verify.mjs` slices the delimited `mirror match` region out of `index.html` and
+  asserts that none of those persistence or networking APIs appear in it at all.
+
+### Report compatibility
+
+Mirror Match reads files this build produced: `report version 1` and
+`snapshot version 1`, with all 14 catalog probes present exactly once. Nothing in
+a file is taken on trust. Labels, categories, weights, caps, bands and every
+total are re-derived from `PROBE_CATALOG` in `core.mjs`, and the file's own
+arithmetic is recomputed and compared before anything is displayed — so a
+hand-edited total cannot be shown as fact, and text in a file cannot reach the
+page.
+
+A file larger than **256 KiB** (`262144` bytes, measured in UTF-8 bytes) is
+refused without being read. A genuine report is a few kilobytes.
+
+Validation is atomic: either both files pass and a comparison appears, or nothing
+is imported, no comparison is shown, and every reason is listed. Each reason has
+a stable code:
+
+| Code | Meaning |
+| --- | --- |
+| `no-file` | No file was chosen for that side |
+| `unreadable` | The file could not be read from disk |
+| `not-text` | The input was not text |
+| `too-large` | Larger than the 256 KiB bound; not read |
+| `empty` | The file has no content |
+| `malformed-json` | Not valid JSON |
+| `not-object` | Valid JSON, but not an object at the root |
+| `foreign-report` | Does not identify itself as a GLASSHOUSE report |
+| `unsupported-version` | A report or snapshot version this build does not read |
+| `raw-flag-invalid` | `includesRawValues` is not a literal `true` or `false` |
+| `signals-missing` | No signals array |
+| `unknown-probe` | A probe id this build does not have |
+| `duplicate-probe` | The same probe listed more than once |
+| `missing-probe` | A catalog probe absent from the file |
+| `invalid-status` | A status outside `ok`/`unsupported`/`denied`/`error` |
+| `invalid-detail` | A detail grade that its status cannot carry |
+| `invalid-weight` | A weight that disagrees with the catalog |
+| `invalid-points` | Points that disagree with the published formula |
+| `score-missing` | No score block with a categories array |
+| `score-bounds` | A total or maximum outside the possible range |
+| `score-inconsistent` | A total, percentage or band the signals do not support |
+| `category-inconsistent` | A category cap or total the signals do not support |
+| `raw-values-missing` | Claims to include values, but a probe has none |
+| `raw-values-invalid` | A value that cannot support its own declared grade |
+
+### Redacted versus raw
+
+A **redacted** report — the default when you save one — is fully useful here. The
+whole **structural** comparison (statuses, detail grades, points, category totals
+and the headline delta) is derived from the audit trail, which redaction keeps.
+
+Exact value changes are a separate, narrower thing. They appear only when *both*
+files declare `includesRawValues: true` and their values still normalise to the
+grades they claim. If either side is redacted, the page says so in as many words
+— that exact value comparison is unavailable while the structural comparison
+remains valid — instead of guessing. One redacted side withdraws every exact
+comparison, including from the open side.
+
+Consent is never inferred: only a literal boolean opts a file in, so a report
+whose flag is the string `"true"` is refused rather than read as raw.
+
+### The comparison file
+
+**Save comparison JSON** goes through `buildComparisonExport()` and
+`stableStringify()`, so it is byte-reproducible and diffable.
+
+- By default it is written as `glasshouse-comparison-redacted.json`, with the
+  `valueBefore`, `valueAfter`, `displayBefore` and `displayAfter` keys removed
+  from every signal and replaced with `valuesOmitted: true`. That a reading
+  changed is kept; what it was is not.
+- Tick **Include the exact value changes** and it is written as
+  `glasshouse-comparison-with-values.json` instead. As with the report export,
+  only a literal boolean `true` opts in, and opting in cannot conjure values that
+  a redacted pair never carried — the file then says
+  `includesExactValues: false` and explains why.
+
+Either way the file identifies both sides honestly: each report's save time, its
+own redaction state, and its own totals, alongside a `semantics` block stating
+what the comparison does and does not mean.
+
+### What a comparison does not tell you
+
+- It compares two files, not two devices. It cannot tell you whether the same
+  machine produced both, and it does not try to.
+- A smaller total in B means these particular probes returned less. It is not a
+  privacy score, and the [Limitations](#limitations) above apply unchanged to
+  both sides.
+- A signal that changed value between two runs on one machine usually means
+  deliberate randomisation, not a different device.
+- Nothing here compares either report against any other person or population.
+
 ## Local preview
 
 Serve the two browser files over a local HTTP server so ES-module loading follows
@@ -263,7 +402,6 @@ node --check core.mjs                 # syntax check the module
 `verify.mjs` has no dependencies and uses only Node built-ins. It runs the
 deterministic unit tests for normalization, scoring, redaction and comparison,
 and it also enforces structural gates that a unit test cannot:
-
 - `index.html` has no absolute URL, external resource, or networking API, and
   imports `./core.mjs`.
 - The page defines a collector for every catalog probe, calls the tested core
@@ -278,6 +416,11 @@ and it also enforces structural gates that a unit test cannot:
 - This README's probe list, weights, category caps, maximum total and band
   labels are checked against `core.mjs` itself, so the documentation cannot
   drift from the code.
+- The delimited `mirror match` region of `index.html` contains no persistence or
+  networking API at all, enforces the size bound before reading a file, and
+  commits imported state only after both files have validated.
+- The rejection codes this README documents are compared against the codes the
+  validator can actually emit, so neither list can drift.
 
 ## Licence
 

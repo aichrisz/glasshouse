@@ -793,3 +793,674 @@ PASS  html/reveal: renders each signal during the staged probe loop
 verify: 1 passed, 0 failed, 1 selected, 24 defined (filter: html/reveal)
 exit=0
 ```
+
+---
+
+# v1.1 — MIRROR MATCH
+
+Comparing two previously exported reports, locally. Same discipline as v1.0: one
+focused check added to `verify.mjs` first, run to observe a real failure, then the
+minimum production code, then the focused check again. Commands and output below
+are copied from the terminal, with trailing whitespace stripped so
+`git diff --check` stays clean — the verifier's failure lines end with `| `.
+
+Baseline before starting (v1.0, clean `main`):
+
+```
+$ node verify.mjs
+verify: 24 passed, 0 failed, 24 selected, 24 defined
+exit=0
+```
+
+---
+
+## Slice 25 — an imported report is bounded, parseable and recognisable
+
+RED
+
+```
+$ node verify.mjs --only 'core/import'
+FAIL  core/import: rejects unbounded, malformed, non-object and foreign report text: parseReportText must be a function | + actual - expected |  | + 'undefined'
+
+verify: 0 passed, 1 failed, 1 selected, 25 defined (filter: core/import)
+exit=1
+```
+
+GREEN — added `REPORT_IMPORT_LIMITS` (256 KiB / `262144` bytes), a pure
+`utf8ByteLength()` so the bound does not depend on a platform encoder, and
+`parseReportText()` gating on: not text, too large (short-circuiting before
+`JSON.parse`), empty, malformed JSON, non-object root, foreign `app`, and an
+unsupported `reportVersion`.
+
+```
+$ node verify.mjs --only 'core/import'
+PASS  core/import: rejects unbounded, malformed, non-object and foreign report text
+
+verify: 1 passed, 0 failed, 1 selected, 25 defined (filter: core/import)
+exit=0
+```
+
+---
+
+## Slice 26 — the signal list must be exactly the catalog, once each
+
+RED
+
+```
+$ node verify.mjs --only 'core/import: rejects missing'
+FAIL  core/import: rejects missing, duplicated and unknown probe ids: expected rejection for signals-missing |  | true !== false |
+
+verify: 0 passed, 1 failed, 1 selected, 26 defined (filter: core/import: rejects missing)
+exit=1
+```
+
+GREEN — `validateReport()` now requires a signals array and accumulates
+`unknown-probe`, `duplicate-probe` and `missing-probe` for the whole file before
+returning, so a reader sees every problem at once rather than one per attempt.
+
+```
+$ node verify.mjs --only 'core/import'
+PASS  core/import: rejects unbounded, malformed, non-object and foreign report text
+PASS  core/import: rejects missing, duplicated and unknown probe ids
+
+verify: 2 passed, 0 failed, 2 selected, 26 defined (filter: core/import)
+exit=0
+```
+
+---
+
+## Slice 27 — the file's own arithmetic is recomputed, never trusted
+
+RED
+
+```
+$ node verify.mjs --only 'core/import: rejects invalid'
+FAIL  core/import: rejects invalid grades and score arithmetic it cannot re-derive: expected rejection for invalid-status |  | true !== false |
+
+verify: 0 passed, 1 failed, 1 selected, 27 defined (filter: core/import: rejects invalid)
+exit=1
+```
+
+While driving this one to green the check itself failed three more times, each
+time because the test's assumption about the fixture was wrong rather than
+because the code was. Those are recorded because they are the interesting part:
+
+```
+FAIL  ... expected rejection for invalid-detail |  | true !== false |
+FAIL  ... expected rejection for invalid-points |  | true !== false |
+FAIL  ... expected rejection for score-inconsistent |  | true !== false |
+```
+
+- `memory` was asserted to be unsupported in fixture A, but A supplies it, so
+  "declares a detail grade it cannot carry" was a no-op mutation.
+- `memory.points = 5` was already its correct value, so the mutation asserted
+  nothing.
+- Fixture A scores a full 88/88, so relabelling it "Broad surface" was also a
+  no-op. The mutation was changed to mislabel it "Narrow surface".
+
+Fixture A scoring 88/88 turned out to be worth keeping: it makes every delta in
+the later slices a reduction, which is the direction a reader actually cares
+about.
+
+GREEN — per-signal validation of status against `STATUSES`, detail against the
+status (`full`/`coarse` for `ok`, `none` otherwise), weight against the catalog,
+and points against `scoreSignal()`. Then the score block: `score-missing`,
+`score-bounds` (maximum and range), and finally `category-inconsistent` /
+`score-inconsistent` by rebuilding the whole score from the file's own statuses
+and details with `scoreSnapshot()` and comparing every figure.
+
+```
+$ node verify.mjs --only 'core/import'
+PASS  core/import: rejects unbounded, malformed, non-object and foreign report text
+PASS  core/import: rejects missing, duplicated and unknown probe ids
+PASS  core/import: rejects invalid grades and score arithmetic it cannot re-derive
+
+verify: 3 passed, 0 failed, 3 selected, 27 defined (filter: core/import)
+exit=0
+```
+
+---
+
+## Slice 28 — a redacted export imports cleanly, re-derived from the catalog
+
+RED
+
+```
+$ node verify.mjs --only 'core/import: accepts'
+FAIL  core/import: accepts a redacted export and re-derives it from the catalog: a report without raw values is flagged as redacted | + actual - expected |  | + undefined
+
+verify: 0 passed, 1 failed, 1 selected, 28 defined (filter: core/import: accepts)
+exit=1
+```
+
+GREEN — the accepted form is a closed shape built from `PROBE_CATALOG` and from
+the recomputed score, in catalog order, with unrecognised keys dropped. Labels,
+categories, weights, caps and bands come from the code, so a file cannot inject
+text into the page or relabel itself into a better figure. The test proves this
+by renaming a signal's label to `ATTACKER TEXT` and asserting it never appears.
+
+```
+$ node verify.mjs --only 'core/import'
+PASS  core/import: accepts a redacted export and re-derives it from the catalog
+
+verify: 4 passed, 0 failed, 4 selected, 28 defined (filter: core/import)
+exit=0
+```
+
+---
+
+## Slice 29 — raw values require a literal boolean and must still be valid
+
+RED
+
+```
+$ node verify.mjs --only 'core/import: reads raw'
+FAIL  core/import: reads raw values only behind a literal boolean flag: Cannot read properties of null (reading 'userAgent')
+
+verify: 0 passed, 1 failed, 1 selected, 29 defined (filter: core/import: reads raw)
+exit=1
+```
+
+GREEN — `snapshotVersion` joined the version contract; `includesRawValues` must
+be a literal boolean or the file is refused with `raw-flag-invalid`, so the
+string `"true"` can never be read as consent. When values are present each one
+goes back through `normalizeSignal()`: a value that is unusable, or that grades
+differently from the grade the file declares, is `raw-values-invalid`; an `ok`
+probe with no value is `raw-values-missing`; a non-`ok` probe carrying a value is
+refused rather than quietly ignored. A file that declares redaction but still
+contains values is read as redacted, so values a report says it omitted are never
+displayed.
+
+```
+$ node verify.mjs --only 'core/import'
+PASS  core/import: reads raw values only behind a literal boolean flag
+
+verify: 5 passed, 0 failed, 5 selected, 29 defined (filter: core/import)
+exit=0
+```
+
+---
+
+## Slice 30 — a redacted pair still compares in full
+
+RED
+
+```
+$ node verify.mjs --only 'core/mirror'
+FAIL  core/mirror: compares two redacted reports structurally: core.compareReports is not a function
+
+verify: 0 passed, 1 failed, 1 selected, 30 defined (filter: core/mirror)
+exit=1
+```
+
+GREEN — `compareReports(a, b)` returns each side's own headline figures, the
+A-to-B total and percentage deltas, per-category deltas that sum to the total
+delta, and a per-signal record with status/detail/points changes, an
+`increased`/`decreased`/`unchanged` exposure classification, and an ordered
+`changes` list. `COMPARISON_SEMANTICS` states in the result what a comparison
+does and does not mean. Reversing the arguments reverses the sign.
+
+```
+$ node verify.mjs --only 'core/mirror'
+PASS  core/mirror: compares two redacted reports structurally
+
+verify: 1 passed, 0 failed, 1 selected, 30 defined (filter: core/mirror)
+exit=0
+```
+
+---
+
+## Slice 31 — exact values only when both sides carry them
+
+RED
+
+```
+$ node verify.mjs --only 'core/mirror: adds exact'
+FAIL  core/mirror: adds exact value changes only when both reports carry values: Expected values to be strictly equal: | + actual - expected |  | + 'not-read'
+
+verify: 0 passed, 1 failed, 1 selected, 31 defined (filter: core/mirror: adds exact)
+exit=1
+```
+
+GREEN — `valueComparison` became `same` / `different` / `not-read` /
+`unavailable`, values are carried only when both sides opted in, and `different`
+is appended to `changes` after the structural tags. One redacted side sets every
+signal to `unavailable` and withdraws the open side's values from the result
+entirely, which the test checks by asserting no `Mozilla` survives a mixed pair.
+
+```
+$ node verify.mjs --only 'core/mirror'
+PASS  core/mirror: compares two redacted reports structurally
+PASS  core/mirror: adds exact value changes only when both reports carry values
+
+verify: 2 passed, 0 failed, 2 selected, 31 defined (filter: core/mirror)
+exit=0
+```
+
+---
+
+## Slice 32 — the saved comparison is redacted by default
+
+RED
+
+```
+$ node verify.mjs --only 'core/mirror: the comparison export'
+FAIL  core/mirror: the comparison export omits exact values unless opted in: core.buildComparisonExport is not a function
+
+verify: 0 passed, 1 failed, 1 selected, 32 defined (filter: core/mirror: the comparison export)
+exit=1
+```
+
+The first implementation then tripped an existing gate, which is exactly what it
+is for:
+
+```
+$ node verify.mjs --only 'core/'
+FAIL  core/purity: core.mjs references no browser global, clock or randomness: core.mjs must not reference document
+
+verify: 24 passed, 1 failed, 25 selected, 32 defined (filter: core/)
+exit=1
+```
+
+The export object had a `document: 'comparison'` key. The purity gate strips
+string literals but not property names, and it was right to complain: a bare
+`document` in this module is precisely what the gate exists to catch. The key was
+renamed to `kind`.
+
+GREEN — `buildComparisonExport()` removes `valueBefore`, `valueAfter`,
+`displayBefore` and `displayAfter` from every signal and replaces them with
+`valuesOmitted: true` unless the caller passes literal `true` *and* the
+comparison actually has exact values. Opting in on a redacted pair yields
+`includesExactValues: false` with a note explaining why, rather than an empty
+promise. Both sides' save time, redaction state and totals are recorded.
+
+```
+$ node verify.mjs --only 'core/'
+PASS  core/purity: core.mjs references no browser global, clock or randomness
+PASS  core/mirror: the comparison export omits exact values unless opted in
+
+verify: 25 passed, 0 failed, 25 selected, 32 defined (filter: core/)
+exit=0
+```
+
+---
+
+## Slice 33 — accessible import controls and a live result region
+
+RED
+
+```
+$ node verify.mjs --only 'html/mirror'
+FAIL  html/mirror: exposes accessible import controls and a live result region: needs a labelled section
+exit=1
+```
+
+GREEN — a labelled `Mirror Match` section with two real `<input type="file">`
+controls, each with a real `<label>` and an `accept`, three real `<button>`
+controls, a labelled opt-in checkbox, and its own `role="status"`
+`aria-live="polite"` region so an import message never overwrites the scan's.
+The page states the 256 KiB bound, which report versions it can read, and the
+redacted-versus-raw semantics. Every decision is delegated to `core.mjs`; the
+gate also asserts none of the import, comparison or export logic is duplicated in
+the page.
+
+```
+$ node verify.mjs --only 'html/'
+PASS  html/mirror: exposes accessible import controls and a live result region
+
+verify: 6 passed, 0 failed, 6 selected, 33 defined (filter: html/)
+exit=0
+```
+
+---
+
+## Slice 34 — no persistence, no network, and no stale comparison
+
+This is the slice that checks the strongest claim Mirror Match makes, over a
+delimited `/* mirror match: begin … end */` region of `index.html`.
+
+RED — the first version of the gate failed on its own strictness:
+
+```
+$ node verify.mjs --only 'html/mirror: keeps'
+FAIL  html/mirror: keeps imported reports local, unpersisted and off the network: exactly one place may set the current comparison |  | 2 !== 1 |
+exit=1
+```
+
+Two assignments to `mirrorState.comparison` were legitimate — one producing it,
+one clearing it — so the assertion was tightened to "exactly one place may
+*produce* the current comparison" (`= core.compareReports(`).
+
+Writing the gate then exposed a genuine defect: after a successful comparison the
+save button stayed enabled, so choosing a different file and pressing save would
+have written a comparison describing a pair that was no longer selected. The gate
+was extended to require a single invalidation path, which failed for real:
+
+```
+$ node verify.mjs --only 'html/mirror: keeps'
+FAIL  html/mirror: keeps imported reports local, unpersisted and off the network: the region needs a single invalidation path
+exit=1
+```
+
+GREEN — added `invalidateMirror()`, wired to the `change` event on both file
+inputs, which discards both imports, empties the result region and says so. The
+gate now asserts, over the region: no `localStorage`, `sessionStorage`,
+`setItem`, `removeItem`, `indexedDB`, `openDatabase`, cookie, cache or file-system
+API; no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`,
+`FormData`, `postMessage`, `BroadcastChannel`, `action=` or `src=`; that the size
+bound is enforced *before* `.text()` is called; that validation failures are
+collected and gated before any state is committed and before anything is
+rendered; and that clearing resets both inputs, the in-memory state and the
+result region.
+
+```
+$ node verify.mjs --only 'html/'
+PASS  html/mirror: keeps imported reports local, unpersisted and off the network
+
+verify: 7 passed, 0 failed, 7 selected, 34 defined (filter: html/)
+exit=0
+```
+
+---
+
+## Slice 35 — the README cannot drift from the validator
+
+RED
+
+```
+$ node verify.mjs --only 'readme/mirror'
+FAIL  readme/mirror: documents the workflow, bound, schema and honest limits: README needs a "Mirror Match" section
+exit=1
+```
+
+A second real failure followed, from the anti-drift check itself:
+
+```
+FAIL  readme/mirror: documents the workflow, bound, schema and honest limits: expected the validator to emit a real set of codes
+exit=1
+```
+
+The scan for emitted codes assumed `importError('code'` on one line, but the
+calls are wrapped across lines by the formatter. The pattern was corrected to
+allow the line break rather than reformatting the code to suit the test.
+
+GREEN — added `REPORT_IMPORT_ERROR_CODES` as published data, and the gate now
+asserts it lists *exactly* the codes `importError()` can emit in `core.mjs`, and
+that the README documents every one of them plus the two page-level codes
+(`no-file`, `unreadable`). It also checks the bound in both its label and its
+byte figure, the report and snapshot versions, the four redacted comparison keys,
+both output filenames, and that the section makes no claim about two reports
+coming from the same device.
+
+```
+$ node verify.mjs --only 'readme/'
+PASS  readme/docs: documents every probe, weight, cap and boundary truthfully
+PASS  readme/mirror: documents the workflow, bound, schema and honest limits
+
+verify: 2 passed, 0 failed, 2 selected, 35 defined (filter: readme/)
+exit=0
+```
+
+---
+
+## Full suite
+
+```
+$ node verify.mjs
+PASS  core/catalog: declares >=10 probes with complete auditable metadata
+PASS  core/normalize: rejects an unknown probe id
+PASS  core/normalize: absent value becomes unsupported with no detail
+PASS  core/normalize: map values keep declared keys only and tidy strings
+PASS  core/normalize: list values dedupe, preserve order and honour the probe limit
+PASS  core/normalize: number values clamp and round to the declared range
+PASS  core/normalize: denied and error states keep a reason and drop the value
+PASS  core/normalize: masked readings are graded coarse rather than full
+PASS  core/snapshot: fills every probe in catalog order without mutating input
+PASS  core/score: a signal contributes weight for full, half for coarse, zero otherwise
+PASS  core/score: category totals are capped and the overflow is reported
+PASS  core/score: reports a bounded percentage and a named band, purely
+PASS  core/serialize: stable key ordering makes output byte-identical
+PASS  core/report: omits raw values by default, deeply
+PASS  core/report: includes raw values only on explicit opt-in
+PASS  core/compare: classifies value, status, added and removed changes
+PASS  core/purity: core.mjs references no browser global, clock or randomness
+PASS  html/shell: is a self-contained offline document that imports core.mjs
+PASS  html/probes: collects every catalog probe and reuses core, never reimplements it
+PASS  html/controls: exposes accessible controls, guidance and a local export
+PASS  html/reveal: renders each signal during the staged probe loop
+PASS  html/syntax: the inline module parses as an ES module
+PASS  readme/docs: documents every probe, weight, cap and boundary truthfully
+PASS  repo/hygiene: ships only the intended files, with no residue
+PASS  core/import: rejects unbounded, malformed, non-object and foreign report text
+PASS  core/import: rejects missing, duplicated and unknown probe ids
+PASS  core/import: rejects invalid grades and score arithmetic it cannot re-derive
+PASS  core/import: accepts a redacted export and re-derives it from the catalog
+PASS  core/import: reads raw values only behind a literal boolean flag
+PASS  core/mirror: compares two redacted reports structurally
+PASS  core/mirror: adds exact value changes only when both reports carry values
+PASS  core/mirror: the comparison export omits exact values unless opted in
+PASS  html/mirror: exposes accessible import controls and a live result region
+PASS  html/mirror: keeps imported reports local, unpersisted and off the network
+PASS  readme/mirror: documents the workflow, bound, schema and honest limits
+
+verify: 35 passed, 0 failed, 35 selected, 35 defined
+exit=0
+```
+
+```
+$ node --check core.mjs && node --check verify.mjs && git diff --check
+exit=0
+```
+
+---
+
+## Artifact check (not a shipped file)
+
+The gates above are structural: they read `index.html` as text. To confirm the
+page's own runtime behavior, the inline module was extracted and executed in Node
+against a minimal DOM/File shim, and Mirror Match was driven the way a person
+would drive it. The harness lived in `/tmp` and was deleted afterwards, so the
+repository still ships only its five files.
+
+No browser is installed in this environment, so this stands in for a headless
+browser run rather than replacing one. It executes the page's real code, but with
+a shimmed DOM, which is the limitation to keep in mind.
+
+```
+$ node /tmp/gh-harness.mjs
+ok    scan completed and rendered cards
+ok    scan status announced a result
+ok    a snapshot was stored under the disclosed key
+ok    redacted pair produced a comparison
+ok    redacted pair states exact values unavailable
+ok    redacted pair shows the rendering delta
+ok    save button became available
+ok    status announced the comparison
+ok    nothing was persisted by the import
+ok    default comparison filename is the redacted one
+ok    default comparison omits values
+ok    default comparison is valid JSON
+ok    raw pair shows the exact reading change
+ok    opted-in comparison filename says so
+ok    opted-in comparison contains the values
+ok    mixed pair still compares structurally
+ok    mixed pair withholds the open side values
+ok    opting in cannot conjure values
+ok    refusal says nothing was imported
+ok    refusal names both problems
+ok    refusal shows no comparison
+ok    refusal disabled saving
+ok    oversized file was refused without being read
+ok    oversized refusal names the bound
+ok    foreign report refused
+ok    hand-edited total refused
+ok    clear emptied the result region
+ok    clear reset both file inputs
+ok    clear disabled saving
+ok    clear announced itself
+ok    stale comparison discarded on new file choice
+ok    stale comparison cannot be saved
+
+artifact: all checks passed
+```
+
+The oversized case is worth calling out: the shim's `text()` sets a flag if it is
+ever called, and the check asserts the flag is still false — so the page really
+does refuse a large file without reading it, rather than reading it and then
+complaining.
+
+---
+
+## Independent review slice — strict score-shape validation
+
+Review found that an otherwise valid imported report could omit its score band or
+append duplicate/unknown scoring categories. Those fields were ignored and
+re-derived safely, but accepting the malformed shape contradicted the documented
+strict schema.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/import: rejects invalid grades'
+FAIL  core/import: rejects invalid grades and score arithmetic it cannot re-derive: expected rejection for score-inconsistent |  | true !== false |
+
+verify: 0 passed, 1 failed, 1 selected, 35 defined (filter: core/import: rejects invalid grades)
+```
+
+GREEN — the validator now requires the derived band and each published category
+exactly once, with no unknown categories:
+
+```
+$ node verify.mjs --only 'core/import: rejects invalid grades'
+PASS  core/import: rejects invalid grades and score arithmetic it cannot re-derive
+
+verify: 1 passed, 0 failed, 1 selected, 35 defined (filter: core/import: rejects invalid grades)
+```
+
+## Rendered-browser closure
+
+After a temporary Playwright 1.62.1/Chrome-for-Testing installation outside the
+repository, the real page was exercised at 1440×1000 desktop and 390×844 mobile
+viewports. Both redacted fixtures were selected through the native file inputs;
+Mirror Match reported `+19 points`, `3 of 14 signals differ`, exact values
+unavailable, and enabled the local comparison export. Clear reset both inputs
+and disabled export. Each viewport made only the two expected same-origin
+requests (`/` and `/core.mjs`), emitted no console/page errors or failed requests,
+and had document width exactly equal to viewport width. Screenshots were also
+inspected for clipping, overlap, and broken responsive layout.
+
+## Independent review slice — in-flight import cancellation
+
+Fresh-context review found a privacy race: pressing **Clear imported reports**
+while asynchronous `File.text()` reads were pending could let the old run commit
+after the clear. File changes during that window could similarly mismatch the
+visible file names and the comparison.
+
+RED:
+
+```
+$ node verify.mjs --only 'html/mirror: keeps imported'
+FAIL  html/mirror: keeps imported reports local, unpersisted and off the network: an asynchronous read must not commit after clear or invalidation cancels its run
+
+verify: 0 passed, 1 failed, 1 selected, 35 defined (filter: html/mirror: keeps imported)
+```
+
+GREEN — each run now has a monotonic identifier, clear/change invalidates it,
+stale completions return before state mutation, and both file controls are locked
+only while reads are in flight and restored in `finally`:
+
+```
+$ node verify.mjs --only 'html/mirror: keeps imported'
+PASS  html/mirror: keeps imported reports local, unpersisted and off the network
+
+verify: 1 passed, 0 failed, 1 selected, 35 defined (filter: html/mirror: keeps imported)
+```
+
+The complete rendered desktop/mobile interaction run remained green after this
+fix. A separate deterministic fuzz pass sent 5,000 bounded JSON values through
+`parseReportText()` without a throw and confirmed oversized text is rejected.
+
+## Independent review slice — adversarial nesting bounds
+
+A second fresh-context review constructed a report under the 256 KiB file limit
+whose version field was nested 5,000 arrays deep. The rejection message attempted
+to recursively stringify that untrusted value and overflowed the call stack.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/import: rejects unbounded'
+FAIL  core/import: rejects unbounded, malformed, non-object and foreign report text: Got unwanted exception: bounded adversarial JSON must fail closed instead of overflowing the rejection path | Actual message: "Maximum call stack size exceeded"
+
+verify: 0 passed, 1 failed, 1 selected, 35 defined (filter: core/import: rejects unbounded)
+```
+
+GREEN — rejection messages now describe untrusted values without recursive
+serialization. Raw-value normalization also gained an explicit depth bound,
+proven with a 20,000-level nested value:
+
+```
+$ node verify.mjs --only 'core/import: rejects unbounded'
+PASS  core/import: rejects unbounded, malformed, non-object and foreign report text
+
+$ node verify.mjs --only 'core/import: reads raw values'
+PASS  core/import: reads raw values only behind a literal boolean flag
+```
+
+## Independent review slice — deletion versus in-flight scan
+
+Final review also found a baseline privacy race outside Mirror Match: deleting
+local data while the staged probe scan was still running removed the snapshot,
+but that same scan later wrote it back.
+
+RED:
+
+```
+$ node verify.mjs --only 'html/controls'
+FAIL  html/controls: exposes accessible controls, guidance and a local export: storage writes need a cancellation generation
+
+verify: 0 passed, 1 failed, 1 selected, 35 defined (filter: html/controls)
+```
+
+GREEN — scans now capture a storage generation, deletion advances it, and a scan
+may persist only when its generation is still current:
+
+```
+$ node verify.mjs --only 'html/controls'
+PASS  html/controls: exposes accessible controls, guidance and a local export
+
+verify: 1 passed, 0 failed, 1 selected, 35 defined (filter: html/controls)
+```
+
+A real Chromium run then deleted local data during the initial staged scan,
+waited for the scan to finish, and confirmed `glasshouse.snapshot.v1` remained
+absent on both desktop and mobile viewports.
+
+## Final review slice — bounded refusals and truthful redaction metadata
+
+The final review found two release blockers: a size-compliant report could contain
+tens of thousands of signal entries and amplify them into tens of thousands of
+DOM errors, and a redacted comparison export could retain a reason claiming
+exact values were shown.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/import: rejects missing'
+FAIL  core/import: rejects missing, duplicated and unknown probe ids: expected "signals-missing", got "missing-probe,..."
+
+$ node verify.mjs --only 'comparison export omits exact values'
+FAIL  core/mirror: the comparison export omits exact values unless opted in: export metadata must describe the redaction
+```
+
+GREEN — report validation now rejects any signal-array length other than the
+published catalog count before per-entry validation, producing one bounded
+error. Comparison exports now generate export-specific exact-value metadata:
+
+```
+$ node verify.mjs --only 'core/import: rejects missing'
+PASS  core/import: rejects missing, duplicated and unknown probe ids
+
+$ node verify.mjs --only 'comparison export omits exact values'
+PASS  core/mirror: the comparison export omits exact values unless opted in
+```

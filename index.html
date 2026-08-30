@@ -476,6 +476,123 @@
         color: var(--text);
       }
 
+      /* --------------------------- mirror match --------------------------- */
+      .mirror-fields {
+        display: grid;
+        gap: 0.9rem;
+        margin: 1.1rem 0 0.2rem;
+      }
+
+      .field {
+        display: grid;
+        gap: 0.35rem;
+        margin: 0;
+        font-size: 0.9rem;
+      }
+
+      .field > label {
+        font-weight: 600;
+      }
+
+      .field > .fine {
+        color: var(--muted);
+      }
+
+      .field input[type='file'] {
+        width: 100%;
+        max-width: 100%;
+        padding: 0.55rem 0.6rem;
+        border: 1px dashed var(--line-strong);
+        border-radius: 10px;
+        background: var(--glass);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.88rem;
+      }
+
+      .field input[type='file']::file-selector-button {
+        margin-right: 0.7rem;
+        padding: 0.35rem 0.7rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        background: var(--glass-2);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.82rem;
+        cursor: pointer;
+      }
+
+      .mirror-note {
+        margin: 0.9rem 0 0;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--spectral-4);
+        border-radius: 10px;
+        font-size: 0.9rem;
+        color: var(--text);
+        max-width: 66ch;
+      }
+
+      .mirror-errors {
+        list-style: none;
+        margin: 0.9rem 0 0;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--spectral-3);
+        border-radius: 10px;
+        display: grid;
+        gap: 0.4rem;
+        font-size: 0.9rem;
+      }
+
+      .delta {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+
+      .delta-up {
+        color: var(--spectral-3);
+      }
+
+      .delta-down {
+        color: var(--spectral-1);
+      }
+
+      .mirror-signals {
+        list-style: none;
+        margin: 1rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .mirror-signal {
+        padding: 0.7rem 0.85rem;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--glass);
+        font-size: 0.9rem;
+      }
+
+      .mirror-signal[data-exposure='increased'] {
+        border-left-color: var(--spectral-3);
+      }
+
+      .mirror-signal[data-exposure='decreased'] {
+        border-left-color: var(--spectral-1);
+      }
+
+      .mirror-signal h4 {
+        margin: 0 0 0.25rem;
+        font-size: 0.95rem;
+      }
+
+      .mirror-signal p {
+        margin: 0.15rem 0 0;
+        overflow-wrap: anywhere;
+      }
+
       /* --------------------------- comparison, lists --------------------------- */
       .changes,
       .limits {
@@ -643,6 +760,86 @@
             the same across runs are the ones that make a device recognisable.
           </p>
           <div id="compare-body"></div>
+        </section>
+
+        <section class="panel" id="mirror-panel" aria-labelledby="mirror-heading">
+          <h2 id="mirror-heading">Mirror Match: Compare two saved reports</h2>
+          <p>
+            Pick two JSON reports you saved from this page — one from before a change you made, one
+            from after — and see exactly what moved. Both files are read inside this tab. Nothing is
+            uploaded, and nothing is written to storage, so closing or reloading this page discards
+            them.
+          </p>
+
+          <div class="mirror-fields">
+            <p class="field">
+              <label for="mirror-a">Report A — the earlier report</label>
+              <input type="file" id="mirror-a" accept="application/json,.json" />
+            </p>
+            <p class="field">
+              <label for="mirror-b">Report B — the later report</label>
+              <input type="file" id="mirror-b" accept="application/json,.json" />
+            </p>
+          </div>
+
+          <div class="controls">
+            <button type="button" id="mirror-run" class="btn btn-primary">
+              <span aria-hidden="true">⇄</span> Compare reports
+            </button>
+            <button type="button" id="mirror-save" class="btn" disabled>
+              <span aria-hidden="true">↓</span> Save comparison JSON
+            </button>
+            <button type="button" id="mirror-clear" class="btn btn-quiet">
+              <span aria-hidden="true">✕</span> Clear imported reports
+            </button>
+          </div>
+
+          <p class="optin">
+            <input type="checkbox" id="mirror-include-values" />
+            <label for="mirror-include-values">
+              Include the exact value changes in the saved comparison.
+              <span class="fine">
+                Only possible when both reports were saved with their observed values included.
+                Leave it off and the file records which signals changed and by how many points, not
+                what they were.
+              </span>
+            </label>
+          </p>
+
+          <p id="mirror-status" class="status" role="status" aria-live="polite">
+            No reports imported.
+          </p>
+
+          <div id="mirror-body"></div>
+
+          <dl class="stored">
+            <dt>What it can read</dt>
+            <dd>
+              Reports written by this build of GLASSHOUSE: report version 1, snapshot version 1,
+              with all 14 probes present exactly once. Every figure in a file is re-derived from the
+              probe catalog before it is shown, so a hand-edited total cannot be displayed as fact.
+              Anything else is refused, with the reason spelled out.
+            </dd>
+            <dt>Size bound</dt>
+            <dd>
+              A file larger than 256 KiB is refused without being read. A genuine report is a few
+              kilobytes.
+            </dd>
+            <dt>Redacted or raw</dt>
+            <dd>
+              A redacted report — the default when you save one — still gives a complete comparison
+              of statuses, detail grades, points and category totals. Exact value changes appear
+              only when
+              <em>both</em> reports were saved with their observed values included; otherwise that
+              is stated plainly instead of guessed at.
+            </dd>
+            <dt>Nothing is kept</dt>
+            <dd>
+              Imported reports exist in this tab's memory only. They are never written to local
+              storage, session storage, IndexedDB or a cookie, and never sent anywhere.
+              <strong>Clear imported reports</strong> discards them immediately.
+            </dd>
+          </dl>
         </section>
 
         <section class="panel" aria-labelledby="stored-heading">
@@ -1061,6 +1258,7 @@
       };
 
       const state = { snapshot: null, score: null, previous: null };
+      let storageGeneration = 0;
 
       const STATUS_TEXT = {
         ok: 'Read',
@@ -1250,6 +1448,7 @@
       }
 
       async function runProbes() {
+        const runStorageGeneration = storageGeneration;
         els.signalsList.replaceChildren();
         els.scorePanel.hidden = true;
         els.rerun.disabled = true;
@@ -1284,7 +1483,7 @@
 
         renderScore(state.score);
         renderComparison(core.compareSnapshots(state.previous, state.snapshot));
-        writePrevious(state.snapshot);
+        if (runStorageGeneration === storageGeneration) writePrevious(state.snapshot);
 
         const readable = state.snapshot.signals.filter((s) => s.status === 'ok').length;
         els.progress.value = 100;
@@ -1325,6 +1524,7 @@
       }
 
       function resetLocalData() {
+        storageGeneration += 1;
         let removed = 0;
         for (const key of Object.values(core.STORAGE_KEYS)) {
           try {
@@ -1341,6 +1541,372 @@
         els.status.textContent = `Deleted ${removed} local key${removed === 1 ? '' : 's'}. The next run will have nothing to compare against.`;
         els.rerun.focus();
       }
+
+      /* mirror match: begin ------------------------------------------------
+         Local comparison of two reports you previously saved from this page.
+
+         Both files are read inside this tab with the chosen File object's own
+         text() reader, validated by the tested core, and held in module memory
+         only. Nothing in this region writes persistent state of any kind and
+         nothing in it touches the network, so reloading the page discards both
+         imports. Every figure shown below is re-derived by core.mjs from the
+         probe catalog rather than read out of the file.
+         -------------------------------------------------------------------- */
+
+      const mirrorEls = {
+        fileA: document.getElementById('mirror-a'),
+        fileB: document.getElementById('mirror-b'),
+        run: document.getElementById('mirror-run'),
+        save: document.getElementById('mirror-save'),
+        clear: document.getElementById('mirror-clear'),
+        includeValues: document.getElementById('mirror-include-values'),
+        status: document.getElementById('mirror-status'),
+        body: document.getElementById('mirror-body'),
+      };
+
+      const mirrorState = { a: null, b: null, comparison: null };
+      let mirrorRunId = 0;
+
+      const EXPOSURE_TEXT = {
+        increased: 'more was readable in B',
+        decreased: 'less was readable in B',
+        unchanged: 'the same amount was readable',
+      };
+      const VALUE_TEXT = {
+        same: 'identical reading',
+        different: 'the reading itself changed',
+        'not-read': 'not read on both sides, so nothing exact to compare',
+        unavailable: 'exact values unavailable',
+      };
+
+      const signed = (value) => (value > 0 ? `+${value}` : String(value));
+
+      function deltaCell(value) {
+        const cell = document.createElement('td');
+        cell.className = value > 0 ? 'delta delta-up' : value < 0 ? 'delta delta-down' : 'delta';
+        cell.textContent = signed(value);
+        return cell;
+      }
+
+      /** Forget both imports without touching the controls. */
+      function discardMirror() {
+        mirrorState.a = null;
+        mirrorState.b = null;
+        mirrorState.comparison = null;
+        mirrorEls.save.disabled = true;
+      }
+
+      /**
+       * Changing either chosen file invalidates the previous comparison, so a
+       * saved comparison file can never describe a pair that is no longer the
+       * one on screen.
+       */
+      function invalidateMirror() {
+        mirrorRunId += 1;
+        if (!mirrorState.comparison) return;
+        discardMirror();
+        mirrorEls.body.replaceChildren();
+        mirrorEls.status.textContent =
+          'The chosen files changed, so the previous comparison was discarded. Compare again.';
+      }
+
+      async function readMirrorFile(input, side) {
+        const refuse = (code, message) => ({
+          ok: false,
+          errors: [{ code, message: `${side}: ${message}` }],
+        });
+
+        const file = input.files && input.files.length > 0 ? input.files[0] : null;
+        if (!file) return refuse('no-file', 'choose a JSON report you saved from this page.');
+        if (file.size > core.REPORT_IMPORT_LIMITS.maxBytes) {
+          return refuse(
+            'too-large',
+            `that file is larger than the ${core.REPORT_IMPORT_LIMITS.maxBytesLabel} limit for an imported report, so it was not read.`,
+          );
+        }
+
+        let text = '';
+        try {
+          text = await file.text();
+        } catch {
+          return refuse('unreadable', 'that file could not be read from disk.');
+        }
+
+        const result = core.parseReportText(text);
+        if (!result.ok) {
+          return {
+            ok: false,
+            errors: result.errors.map((error) => ({
+              code: error.code,
+              message: `${side}: ${error.message}`,
+            })),
+          };
+        }
+        return { ok: true, report: result.report, name: file.name };
+      }
+
+      async function runMirrorMatch() {
+        const runId = ++mirrorRunId;
+        mirrorEls.run.disabled = true;
+        mirrorEls.fileA.disabled = true;
+        mirrorEls.fileB.disabled = true;
+        mirrorEls.status.textContent = 'Reading both files inside this tab\u2026';
+
+        try {
+          const [sideA, sideB] = await Promise.all([
+            readMirrorFile(mirrorEls.fileA, 'Report A'),
+            readMirrorFile(mirrorEls.fileB, 'Report B'),
+          ]);
+          if (runId !== mirrorRunId) return;
+
+          // Validate both sides completely before anything visible changes: a
+          // partial import is never displayed, and a refusal leaves no comparison
+          // behind at all.
+          const failures = [...(sideA.ok ? [] : sideA.errors), ...(sideB.ok ? [] : sideB.errors)];
+          if (failures.length > 0) {
+            discardMirror();
+            renderMirrorRefusal(failures);
+            return;
+          }
+
+          mirrorState.a = sideA.report;
+          mirrorState.b = sideB.report;
+          mirrorState.comparison = core.compareReports(sideA.report, sideB.report);
+          renderMirror(mirrorState.comparison, sideA.name, sideB.name);
+          mirrorEls.save.disabled = false;
+        } finally {
+          mirrorEls.run.disabled = false;
+          mirrorEls.fileA.disabled = false;
+          mirrorEls.fileB.disabled = false;
+        }
+      }
+
+      function clearMirror() {
+        mirrorRunId += 1;
+        discardMirror();
+        mirrorEls.fileA.value = '';
+        mirrorEls.fileB.value = '';
+        mirrorEls.includeValues.checked = false;
+        mirrorEls.body.replaceChildren();
+        mirrorEls.status.textContent =
+          'Cleared. Both imported reports were discarded from this tab\u2019s memory.';
+        mirrorEls.run.focus();
+      }
+
+      function exportMirror() {
+        if (!mirrorState.comparison) return;
+        const includeExactValues = mirrorEls.includeValues.checked === true;
+        const file = core.buildComparisonExport(mirrorState.comparison, { includeExactValues });
+        const json = core.stableStringify(file, 2);
+
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = file.includesExactValues
+          ? 'glasshouse-comparison-with-values.json'
+          : 'glasshouse-comparison-redacted.json';
+        link.rel = 'noopener';
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        mirrorEls.status.textContent = file.includesExactValues
+          ? 'Saved the comparison including the exact value changes.'
+          : 'Saved the comparison with the exact value changes omitted.';
+      }
+
+      function mirrorSideList(comparison, nameA, nameB) {
+        const list = document.createElement('dl');
+        list.className = 'stored';
+        for (const [letter, side, name] of [
+          ['A', comparison.a, nameA],
+          ['B', comparison.b, nameB],
+        ]) {
+          const term = document.createElement('dt');
+          term.textContent = name ? `Report ${letter} \u2014 ${name}` : `Report ${letter}`;
+          const detail = document.createElement('dd');
+          detail.textContent = [
+            side.createdAt ? `Saved ${side.createdAt}` : 'No save time recorded',
+            side.redacted ? 'observed values redacted' : 'observed values included',
+            `${side.total} of ${side.maxTotal} points (${side.percent}%)`,
+            side.band.label,
+          ].join(' \u00b7 ');
+          list.append(term, detail);
+        }
+        return list;
+      }
+
+      function mirrorCategoryTable(comparison) {
+        const table = document.createElement('table');
+        table.className = 'cats';
+        const caption = document.createElement('caption');
+        caption.className = 'fine';
+        caption.textContent = 'Category points in each report, after each cap is applied.';
+        const thead = document.createElement('thead');
+        thead.innerHTML =
+          '<tr><th scope="col">Category</th><th scope="col">A</th><th scope="col">B</th><th scope="col">Change</th></tr>';
+        const tbody = document.createElement('tbody');
+        for (const category of comparison.categories) {
+          const row = document.createElement('tr');
+          const name = document.createElement('th');
+          name.scope = 'row';
+          name.textContent = category.label;
+          const before = document.createElement('td');
+          before.textContent = String(category.before);
+          const after = document.createElement('td');
+          after.textContent = String(category.after);
+          row.append(name, before, after, deltaCell(category.delta));
+          tbody.append(row);
+        }
+        const foot = document.createElement('tfoot');
+        const total = document.createElement('tr');
+        const totalName = document.createElement('th');
+        totalName.scope = 'row';
+        totalName.textContent = 'Total';
+        const totalBefore = document.createElement('td');
+        totalBefore.textContent = String(comparison.totals.before);
+        const totalAfter = document.createElement('td');
+        totalAfter.textContent = String(comparison.totals.after);
+        total.append(totalName, totalBefore, totalAfter, deltaCell(comparison.totals.delta));
+        foot.append(total);
+        table.append(caption, thead, tbody, foot);
+        return table;
+      }
+
+      function mirrorSignalItem(signal) {
+        const item = document.createElement('li');
+        item.className = 'mirror-signal';
+        item.dataset.exposure = signal.exposure;
+        item.dataset.probe = signal.id;
+
+        const title = document.createElement('h4');
+        title.textContent = signal.label;
+
+        const structure = document.createElement('p');
+        structure.textContent = [
+          `${STATUS_TEXT[signal.statusBefore]} \u2192 ${STATUS_TEXT[signal.statusAfter]}`,
+          `${DETAIL_TEXT[signal.detailBefore]} \u2192 ${DETAIL_TEXT[signal.detailAfter]}`,
+          `${signal.pointsBefore} \u2192 ${signal.pointsAfter} of ${signal.weight} points (${signed(signal.pointsDelta)})`,
+        ].join(' \u00b7 ');
+
+        const meaning = document.createElement('p');
+        meaning.className = 'fine';
+        meaning.textContent = [
+          EXPOSURE_TEXT[signal.exposure],
+          VALUE_TEXT[signal.valueComparison],
+          signal.changes.length > 0 ? `changed: ${signal.changes.join(', ')}` : 'nothing changed',
+        ].join(' \u00b7 ');
+
+        item.append(title, structure, meaning);
+
+        if (signal.valueComparison === 'different') {
+          const before = document.createElement('p');
+          before.className = 'mono fine';
+          before.textContent = `A: ${signal.displayBefore}`;
+          const after = document.createElement('p');
+          after.className = 'mono fine';
+          after.textContent = `B: ${signal.displayAfter}`;
+          item.append(before, after);
+        }
+        return item;
+      }
+
+      function renderMirror(comparison, nameA, nameB) {
+        mirrorEls.body.replaceChildren();
+
+        const headline = document.createElement('p');
+        headline.className = 'score-headline';
+        const figure = document.createElement('span');
+        figure.className = 'score-figure';
+        figure.textContent = signed(comparison.totals.delta);
+        const outOf = document.createElement('span');
+        outOf.className = 'score-outof';
+        outOf.textContent = ` points from A to B \u00b7 ${comparison.totals.before} \u2192 ${comparison.totals.after} of ${comparison.totals.maxTotal} (${signed(comparison.totals.percentDelta)}%)`;
+        headline.append(figure, outOf);
+
+        const bands = document.createElement('p');
+        bands.className = 'score-band';
+        bands.textContent = comparison.totals.bandChanged
+          ? `The descriptive band moved from ${comparison.totals.bandBefore.label} to ${comparison.totals.bandAfter.label}.`
+          : `Both reports sit in the same descriptive band: ${comparison.totals.bandAfter.label}.`;
+
+        const note = document.createElement('p');
+        note.className = 'mirror-note';
+        note.textContent = comparison.exactValues.reason;
+
+        const semantics = document.createElement('p');
+        semantics.className = 'fine';
+        semantics.textContent = comparison.semantics;
+
+        const sidesHeading = document.createElement('h3');
+        sidesHeading.textContent = 'The two reports';
+        const catsHeading = document.createElement('h3');
+        catsHeading.textContent = 'Category totals';
+        const signalsHeading = document.createElement('h3');
+        signalsHeading.textContent = 'Signal by signal';
+
+        const list = document.createElement('ul');
+        list.className = 'mirror-signals';
+        for (const signal of comparison.signals) list.append(mirrorSignalItem(signal));
+
+        const tally = document.createElement('p');
+        tally.className = 'fine';
+        const exact =
+          comparison.summary.exactValueChanges === null
+            ? 'Exact value changes were not comparable.'
+            : `${comparison.summary.exactValueChanges} reading${comparison.summary.exactValueChanges === 1 ? '' : 's'} changed value.`;
+        tally.textContent = `${comparison.summary.changedCount} of ${comparison.summary.probeCount} signals differ. ${comparison.summary.increased} became more readable, ${comparison.summary.decreased} became less readable. ${exact}`;
+
+        mirrorEls.body.append(
+          headline,
+          bands,
+          note,
+          semantics,
+          sidesHeading,
+          mirrorSideList(comparison, nameA, nameB),
+          catsHeading,
+          mirrorCategoryTable(comparison),
+          signalsHeading,
+          tally,
+          list,
+        );
+
+        mirrorEls.status.textContent = `Compared locally. ${signed(comparison.totals.delta)} points from A to B, ${comparison.summary.changedCount} of ${comparison.summary.probeCount} signals differ.`;
+      }
+
+      function renderMirrorRefusal(failures) {
+        mirrorEls.body.replaceChildren();
+
+        const heading = document.createElement('p');
+        heading.className = 'mirror-note';
+        heading.textContent =
+          failures.length === 1
+            ? 'Nothing was imported, and no comparison is shown. One problem was found:'
+            : `Nothing was imported, and no comparison is shown. ${failures.length} problems were found:`;
+
+        const list = document.createElement('ul');
+        list.className = 'mirror-errors';
+        for (const failure of failures) {
+          const item = document.createElement('li');
+          item.textContent = failure.message;
+          list.append(item);
+        }
+
+        mirrorEls.body.append(heading, list);
+        mirrorEls.status.textContent = `Import refused: ${failures.length} problem${failures.length === 1 ? '' : 's'}. Nothing was imported and no comparison is shown.`;
+      }
+
+      mirrorEls.run.addEventListener('click', () => {
+        runMirrorMatch();
+      });
+      mirrorEls.clear.addEventListener('click', clearMirror);
+      mirrorEls.save.addEventListener('click', exportMirror);
+      mirrorEls.fileA.addEventListener('change', invalidateMirror);
+      mirrorEls.fileB.addEventListener('change', invalidateMirror);
+
+      /* mirror match: end -------------------------------------------------- */
 
       els.rerun.addEventListener('click', () => {
         runProbes();

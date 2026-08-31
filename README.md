@@ -4,7 +4,8 @@ A zero-install, single-page browser inspection. It asks your browser the same
 questions a tracking script would ask, shows you each answer as it arrives,
 explains what the answer reveals and what you can do about it, and then stops.
 It can also compare two reports you saved earlier, so you can see whether a
-setting you changed actually changed anything.
+setting you changed actually changed anything, and repeat the same probes a few
+times in a row to see which answers hold still.
 
 Nothing is uploaded. There is no build step, no dependency, no package manager,
 no service worker and no network request after the document has loaded. Open
@@ -15,8 +16,8 @@ Expected deployment: <https://aichrisz.github.io/glasshouse/>
 - `index.html` — the entire interface: original CSS, a canvas backdrop, and one
   inline ES module that collects the probes and renders the results.
 - `core.mjs` — every deterministic decision: normalization, scoring, report
-  redaction, snapshot comparison and report import/comparison. Pure functions,
-  no browser globals.
+  redaction, snapshot comparison, report import/comparison and echo
+  classification. Pure functions, no browser globals.
 - `verify.mjs` — the test suite and the structural gates. Node built-ins only.
 - `TDD_EVIDENCE.md` — the RED/GREEN log for how this was built.
 
@@ -69,8 +70,8 @@ Read this section before you read your score.
   by this measurement.
 - **Randomisation reads as instability.** Some browsers deliberately return
   noisy or coarsened answers, especially for canvas and WebGL. In the
-  "Since your last run" panel that appears as values that keep changing. That is
-  a protection working, not a fault.
+  "Since your last run" panel, and in an [Echo Test](#echo-test), that appears as
+  values that keep changing. That is a protection working, not a fault.
 - **The probe set is fixed and small.** A real tracking script can use more
   signals, and more invasive ones. A perfect score here does not mean nothing
   else is readable.
@@ -186,6 +187,10 @@ category row shows its cap and flags itself when the cap bit.
 | **Include the exact value changes** | Opt-in checkbox for the saved comparison, effective only when both reports carry values |
 | **Save comparison JSON** | Writes the comparison to a local file, with exact values omitted by default |
 | **Clear imported reports** | Discards both imported reports from memory at once |
+| **Start echo test** | Runs the 14 probes 3 sequential runs in a row for [Echo Test](#echo-test), in memory only |
+| **Include all exact readings that the runs returned** | Opt-in checkbox controlling whether the saved echo file carries the readings themselves |
+| **Save echo JSON** | Writes the experiment to a local file, with the readings omitted by default |
+| **Clear echo test** | Discards every recorded run immediately, and cancels a run still in flight |
 
 Every control is a real `<button>` or labelled `<input>`, reachable and operable
 by keyboard, with a visible focus ring. Progress is a `<progress>` element and
@@ -209,6 +214,8 @@ is set, and the layout is built mobile-first from 360px upward.
   storage. They are never sent anywhere.
 - Reports you import for [Mirror Match](#mirror-match) are read from your own
   disk into this tab's memory only. They are never persisted and never sent.
+- Every run recorded by [Echo Test](#echo-test) exists in this tab's memory only.
+  It is never persisted and never sent, so a reload discards all of it.
 
 ## Stored data
 
@@ -374,6 +381,101 @@ what the comparison does and does not mean.
   deliberate randomisation, not a different device.
 - Nothing here compares either report against any other person or population.
 
+## Echo Test
+
+A scan tells you what could be read once. **Echo Test** asks the narrower,
+more useful question: *which of those answers hold still?* It reads the same 14
+probes for 3 sequential runs in a row, in this tab, and then classifies every
+signal by what actually happened across those runs.
+
+It adds no new probe. Every run goes through the same collection path the
+ordinary scan uses, so the experiment cannot ask your browser for anything the
+page has not already disclosed, and it cannot drift from a normal run.
+
+### Workflow
+
+1. Press **Start echo test**.
+2. Watch the status line count the runs — `Run 1 of 3`, then `Run 2 of 3`.
+   **Clear echo test** stays operable the whole time, so you can withdraw
+   part-way through.
+3. Read the per-signal classifications, the per-category tally and the plain
+   language evidence behind each one.
+4. Optionally press **Save echo JSON** to keep the experiment as a file.
+5. Press **Clear echo test** to discard every recorded run immediately.
+
+### Classifications
+
+Each signal receives exactly one of four outcomes, derived in `core.mjs` and
+published there as data:
+
+| Code | Label | Meaning |
+| --- | --- | --- |
+| `stable` | Stable | At least two runs returned a reading, every reading was identical, and the outcome never changed |
+| `variable` | Variable | At least two runs returned a reading and at least one differed from another, with no change of outcome |
+| `intermittent` | Intermittent | The outcome itself changed between runs — any transition among readable, blocked, unsupported or failing |
+| `unavailable` | Not enough evidence | Fewer than two runs returned a reading and the outcome never changed, so there was nothing to compare |
+
+The precedence is deliberate: a status change **outranks** any value
+comparison. A probe that answers once and refuses later is reported as
+`intermittent` whatever its values did, because it cannot be relied on in
+either direction. Equally, a single reading is never called `stable` — with
+nothing to compare it against, `unavailable` is the honest answer, not a zero.
+
+Values are compared with the same deterministic serialisation the rest of the
+page uses, so a map whose keys arrive in a different order is not mistaken for a
+change, while a list whose order changed genuinely is one.
+
+Category summaries and the overall tally are counted from these per-signal
+classifications and from nothing else: every category's four counts add up to
+its own probe count, and the overall counts add up to 14.
+
+### Privacy boundary for the experiment
+
+- Every recorded run lives in one module-scope object in this tab. Runs are
+  **never written to** `localStorage`, session storage, IndexedDB, the Cache API
+  or a cookie, and never sent anywhere.
+- Because nothing is persisted, a **reload** or a closed tab discards every run.
+  There is nothing to delete afterwards.
+- **Clear echo test** discards the recorded runs and cancels a run still in
+  flight. A run you cancel cannot come back: it will not repopulate state, will
+  not render, and will not re-enable the export when its last probe finishes.
+- Conflicting controls are disabled while a run is in progress, but **Clear echo
+  test** is not, so consent can be withdrawn at any moment.
+- No permission is requested, and no probe outside the published catalog is used.
+- `verify.mjs` slices the delimited `echo test` region out of `index.html` and
+  asserts that no persistence or networking API appears in it at all, that it
+  invokes no probe collector of its own, and that its cancellation guards sit
+  before the commit.
+
+### The echo file
+
+**Save echo JSON** goes through `buildEchoExport()` and `stableStringify()`, so
+it is byte-reproducible and diffable.
+
+- By default it is written as `glasshouse-echo-redacted.json`, with the `values`
+  and `displays` keys removed from every signal and replaced with
+  `valuesOmitted: true`. The classification, the outcome in each run, the number
+  of distinct readings, whether the reading changed and the evidence sentence are
+  all kept — so the experiment stays auditable without describing your device.
+- Tick **Include all exact readings that the runs returned** and it is written as
+  `glasshouse-echo-with-values.json` instead. Only a literal boolean `true`
+  opts in, so a truthy value cannot silently include your readings, and opting in
+  cannot conjure values that no run ever produced.
+- When the readings are included, the file carries a `valuesWarning` saying in as
+  many words that it may reveal details about this device and browser.
+- Either way the `exactValues` block states whether values were `available` and
+  whether they were `included`, so a reader cannot mistake redaction for a bug.
+
+### What an echo test does not tell you
+
+- It measures repeatability within one browser session, not how recognisable you
+  are. The [Limitations](#limitations) above apply unchanged.
+- `stable` across 3 runs a few seconds apart does not mean stable forever. A
+  browser restart, an update or a settings change can move any of it.
+- `variable` is usually a browser deliberately varying its answer, which is a
+  defence working — but it is not a promise that the signal is unusable.
+- Nothing here compares your results against any other person or population.
+
 ## Local preview
 
 Serve the two browser files over a local HTTP server so ES-module loading follows
@@ -421,6 +523,11 @@ and it also enforces structural gates that a unit test cannot:
   commits imported state only after both files have validated.
 - The rejection codes this README documents are compared against the codes the
   validator can actually emit, so neither list can drift.
+- The delimited `echo test` region of `index.html` contains no persistence or
+  networking API at all, invokes no probe collector of its own, and commits an
+  experiment only after its cancellation guard has passed.
+- This README's echo run count, classification codes, classification labels and
+  export file names are checked against `core.mjs`, so they cannot drift either.
 
 ## Licence
 

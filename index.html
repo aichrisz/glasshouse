@@ -593,6 +593,105 @@
         overflow-wrap: anywhere;
       }
 
+      /* ----------------------------- echo test ----------------------------- */
+      .echo-progress {
+        margin: 1rem 0 0.35rem;
+      }
+
+      .echo-signals {
+        list-style: none;
+        margin: 1rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .echo-signal {
+        padding: 0.7rem 0.85rem;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--glass);
+        font-size: 0.9rem;
+      }
+
+      .echo-signal[data-stability='stable'] {
+        border-left-color: var(--spectral-4);
+      }
+
+      .echo-signal[data-stability='variable'] {
+        border-left-color: var(--spectral-1);
+      }
+
+      .echo-signal[data-stability='intermittent'] {
+        border-left-color: var(--spectral-2);
+      }
+
+      .echo-signal h4 {
+        margin: 0 0 0.25rem;
+        font-size: 0.95rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.5rem;
+      }
+
+      .echo-signal p {
+        margin: 0.15rem 0 0;
+        overflow-wrap: anywhere;
+      }
+
+      .echo-grade {
+        font-size: 0.72rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        font-weight: 700;
+        padding: 0.1rem 0.45rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .echo-runs {
+        list-style: none;
+        margin: 0.4rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.2rem;
+      }
+
+      .echo-runs li {
+        font-size: 0.82rem;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      /* Five columns will not fit 360px, so the tally scrolls sideways and is
+         reachable by keyboard rather than being clipped. */
+      .echo-table {
+        margin: 0.9rem 0 0;
+        overflow-x: auto;
+        border-radius: 10px;
+      }
+
+      .echo-table:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 3px;
+      }
+
+      .echo-table .cats {
+        min-width: 26rem;
+      }
+
+      .echo-table .cats thead th {
+        white-space: nowrap;
+      }
+
+      .echo-table .cats td {
+        width: 3.6rem;
+      }
+
       /* --------------------------- comparison, lists --------------------------- */
       .changes,
       .limits {
@@ -838,6 +937,86 @@
               Imported reports exist in this tab's memory only. They are never written to local
               storage, session storage, IndexedDB or a cookie, and never sent anywhere.
               <strong>Clear imported reports</strong> discards them immediately.
+            </dd>
+          </dl>
+        </section>
+
+        <section class="panel" id="echo-panel" aria-labelledby="echo-heading">
+          <h2 id="echo-heading">Echo Test: which answers hold still</h2>
+          <p>
+            A single scan tells you what could be read. This asks a different question: read the
+            same probes 3 sequential runs in a row, right now, and see which answers came back
+            identical every time. Nothing new is probed, nothing extra is asked of your browser, and
+            every run stays in this tab's memory.
+          </p>
+
+          <div class="controls">
+            <button type="button" id="echo-run" class="btn btn-primary">
+              <span aria-hidden="true">⟳</span> Start echo test
+            </button>
+            <button type="button" id="echo-save" class="btn" disabled>
+              <span aria-hidden="true">↓</span> Save echo JSON
+            </button>
+            <button type="button" id="echo-clear" class="btn btn-quiet">
+              <span aria-hidden="true">✕</span> Clear echo test
+            </button>
+          </div>
+
+          <p class="optin">
+            <input type="checkbox" id="echo-include-values" />
+            <label for="echo-include-values">
+              Include all exact readings that the runs returned in the saved file.
+              <span class="fine">
+                Leave this off and the file records how each signal behaved — its classification,
+                its outcome in each run, and whether the reading changed — without recording what
+                the reading was.
+              </span>
+            </label>
+          </p>
+
+          <p class="echo-progress">
+            <label class="visually-hidden" for="echo-progress">Echo test progress</label>
+            <progress id="echo-progress" max="100" value="0"></progress>
+          </p>
+          <p id="echo-status" class="status" role="status" aria-live="polite">
+            No echo test has been run.
+          </p>
+
+          <div id="echo-body"></div>
+
+          <dl class="stored">
+            <dt>Stable</dt>
+            <dd>
+              At least two runs returned a reading, every reading was identical, and the outcome
+              never changed within this experiment. This does not prove that it will stay the same
+              after a restart, update or settings change.
+            </dd>
+            <dt>Variable</dt>
+            <dd>
+              At least two runs returned a reading and at least one differed, with no change of
+              outcome. Some browsers vary these answers deliberately.
+            </dd>
+            <dt>Intermittent</dt>
+            <dd>
+              The outcome itself changed between runs — any transition among readable, blocked,
+              unsupported or failing. The probe did not behave the same way each time.
+            </dd>
+            <dt>Not enough evidence</dt>
+            <dd>
+              Fewer than two runs returned a reading and the outcome never changed, so there was
+              nothing to compare. This is the honest answer, not a zero.
+            </dd>
+            <dt>While it runs</dt>
+            <dd>
+              The status line above counts the runs as they happen — Run 1 of 3, then Run 2 of 3 —
+              and <strong>Clear echo test</strong> stays available throughout, so you can withdraw
+              at any moment. A run you cancel is discarded rather than finished quietly.
+            </dd>
+            <dt>Nothing is kept</dt>
+            <dd>
+              The repeated readings live in this tab's memory only. They are never written to local
+              storage, session storage, IndexedDB or a cookie, and never sent anywhere. Reloading
+              this page discards them.
             </dd>
           </dl>
         </section>
@@ -1447,22 +1626,31 @@
         els.comparePanel.hidden = false;
       }
 
-      async function runProbes() {
-        const runStorageGeneration = storageGeneration;
-        els.signalsList.replaceChildren();
-        els.scorePanel.hidden = true;
-        els.rerun.disabled = true;
-        els.exportReport.disabled = true;
-        els.progress.value = 0;
-        state.previous = readPrevious();
-
+      /**
+       * Run every catalog probe once, in catalog order, and return the raw
+       * observations for core.mjs to normalize.
+       *
+       * This is the only place a probe collector is ever invoked. The staged
+       * scan and the ECHO TEST both go through it, so a repeated run can never
+       * drift from an ordinary one, and no second copy of a probe exists.
+       *
+       * Returns `null` when the caller's `cancelled` hook asks it to stop.
+       *
+       * @param {{onStart?: (probe: object, index: number) => void,
+       *          onDone?: (signal: object, index: number) => void,
+       *          cancelled?: () => boolean,
+       *          pause?: number}} [hooks]
+       */
+      async function collectObservations(hooks = {}) {
+        const { onStart, onDone, cancelled, pause = 150 } = hooks;
         const raw = [];
         let index = 0;
+
         for (const probe of core.PROBE_CATALOG) {
           index += 1;
-          els.status.textContent = `Probe ${index} of ${core.PROBE_CATALOG.length}: ${probe.label}…`;
-          els.progress.value = Math.round((index / core.PROBE_CATALOG.length) * 100);
-          await wait(150);
+          if (onStart) onStart(probe, index);
+          await wait(pause);
+          if (cancelled && cancelled()) return null;
 
           try {
             raw.push({ id: probe.id, value: collectors[probe.id]() });
@@ -1474,9 +1662,31 @@
             });
           }
 
-          const revealed = core.normalizeSignal(raw.at(-1));
-          els.signalsList.append(signalCard(revealed, core.scoreSignal(revealed)));
+          if (onDone) onDone(core.normalizeSignal(raw.at(-1)), index);
         }
+
+        return raw;
+      }
+
+      async function runProbes() {
+        const runStorageGeneration = storageGeneration;
+        els.signalsList.replaceChildren();
+        els.scorePanel.hidden = true;
+        els.rerun.disabled = true;
+        els.exportReport.disabled = true;
+        echoEls.run.disabled = true;
+        els.progress.value = 0;
+        state.previous = readPrevious();
+
+        const raw = await collectObservations({
+          onStart: (probe, index) => {
+            els.status.textContent = `Probe ${index} of ${core.PROBE_CATALOG.length}: ${probe.label}…`;
+            els.progress.value = Math.round((index / core.PROBE_CATALOG.length) * 100);
+          },
+          onDone: (revealed) => {
+            els.signalsList.append(signalCard(revealed, core.scoreSignal(revealed)));
+          },
+        });
 
         state.snapshot = core.normalizeSnapshot(raw, { createdAt: new Date().toISOString() });
         state.score = core.scoreSnapshot(state.snapshot);
@@ -1490,6 +1700,7 @@
         els.status.textContent = `Done. ${readable} of ${core.PROBE_CATALOG.length} probes returned a reading. ${state.score.total} of ${state.score.maxTotal} points, ${state.score.band.label}.`;
         els.rerun.disabled = false;
         els.exportReport.disabled = false;
+        echoEls.run.disabled = false;
       }
 
       /* -----------------------------------------------------------------
@@ -1907,6 +2118,303 @@
       mirrorEls.fileB.addEventListener('change', invalidateMirror);
 
       /* mirror match: end -------------------------------------------------- */
+
+      /* echo test: begin ---------------------------------------------------
+         A local repeatability experiment: read the same probe set several times
+         in a row and report, per signal, whether the answers held still.
+
+         Nothing here adds a probe. Every pass goes through the same
+         collectObservations() path the staged scan uses, so the experiment
+         cannot drift from an ordinary run and cannot ask your browser for
+         anything the page has not already disclosed.
+
+         Nothing here writes persistent state of any kind and nothing here
+         reaches outward, so reloading the page discards every recorded run.
+         Each classification below is derived by core.mjs from the probe
+         catalog; this region only draws it.
+         -------------------------------------------------------------------- */
+
+      const echoEls = {
+        run: document.getElementById('echo-run'),
+        save: document.getElementById('echo-save'),
+        clear: document.getElementById('echo-clear'),
+        includeValues: document.getElementById('echo-include-values'),
+        progress: document.getElementById('echo-progress'),
+        status: document.getElementById('echo-status'),
+        body: document.getElementById('echo-body'),
+      };
+
+      const echoState = { runs: null, summary: null };
+      let echoRunId = 0;
+
+      const ECHO_GRADE_MARK = {
+        stable: '\u25c8',
+        variable: '\u25cc',
+        intermittent: '\u2298',
+        unavailable: '\u25cb',
+      };
+
+      /** Forget every recorded run, and withdraw the export with them. */
+      function discardEcho() {
+        echoState.runs = null;
+        echoState.summary = null;
+        echoEls.save.disabled = true;
+      }
+
+      /**
+       * Run the experiment. Each pass claims the current generation; if the
+       * visitor clears the experiment while a pass is in flight, the generation
+       * moves on and this run abandons itself without writing state, rendering
+       * anything, or enabling the export.
+       */
+      async function runEchoTest() {
+        const runId = ++echoRunId;
+        const total = core.ECHO_RUN_COUNT;
+        const probeCount = core.PROBE_CATALOG.length;
+
+        discardEcho();
+        echoEls.body.replaceChildren();
+        echoEls.progress.value = 0;
+        echoEls.run.disabled = true;
+        els.rerun.disabled = true;
+
+        try {
+          const runs = [];
+          for (let pass = 1; pass <= total; pass += 1) {
+            const raw = await collectObservations({
+              pause: 60,
+              cancelled: () => runId !== echoRunId,
+              onStart: (probe, index) => {
+                echoEls.status.textContent = `Run ${pass} of ${total} \u00b7 probe ${index} of ${probeCount}: ${probe.label}\u2026`;
+                echoEls.progress.value = Math.round(
+                  (((pass - 1) * probeCount + index) / (total * probeCount)) * 100,
+                );
+              },
+            });
+            if (runId !== echoRunId) return;
+            if (raw === null) return;
+            runs.push(core.normalizeSnapshot(raw));
+          }
+
+          if (runId !== echoRunId) return;
+          echoState.runs = runs;
+          echoState.summary = core.summarizeEchoRuns(runs);
+          renderEcho(echoState.summary);
+          echoEls.progress.value = 100;
+          echoEls.save.disabled = false;
+        } finally {
+          echoEls.run.disabled = false;
+          els.rerun.disabled = false;
+        }
+      }
+
+      function clearEcho() {
+        echoRunId += 1;
+        discardEcho();
+        echoEls.includeValues.checked = false;
+        echoEls.body.replaceChildren();
+        echoEls.progress.value = 0;
+        echoEls.status.textContent =
+          'Cleared. Every recorded run was discarded from this tab\u2019s memory, and any run still in progress was cancelled.';
+        echoEls.run.focus();
+      }
+
+      function exportEcho() {
+        if (!echoState.summary) return;
+        const includeExactValues = echoEls.includeValues.checked === true;
+        const file = core.buildEchoExport(echoState.summary, { includeExactValues });
+        const json = core.stableStringify(file, 2);
+
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = file.includesExactValues
+          ? 'glasshouse-echo-with-values.json'
+          : 'glasshouse-echo-redacted.json';
+        link.rel = 'noopener';
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        echoEls.status.textContent = file.includesExactValues
+          ? 'Saved the echo test including all exact readings that the runs returned. That file may describe this device.'
+          : 'Saved the echo test with the exact readings omitted.';
+      }
+
+      function echoCategoryTable(echo) {
+        const table = document.createElement('table');
+        table.className = 'cats';
+
+        const caption = document.createElement('caption');
+        caption.className = 'fine';
+        caption.textContent = `How each category behaved across the ${echo.runCount} runs.`;
+
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        const corner = document.createElement('th');
+        corner.scope = 'col';
+        corner.textContent = 'Category';
+        headRow.append(corner);
+        for (const id of core.ECHO_STABILITY_IDS) {
+          const cell = document.createElement('th');
+          cell.scope = 'col';
+          cell.textContent = core.ECHO_STABILITY[id].label;
+          headRow.append(cell);
+        }
+        thead.append(headRow);
+
+        const tbody = document.createElement('tbody');
+        for (const category of echo.categories) {
+          const row = document.createElement('tr');
+          const name = document.createElement('th');
+          name.scope = 'row';
+          name.textContent = category.label;
+          row.append(name);
+          for (const id of core.ECHO_STABILITY_IDS) {
+            const cell = document.createElement('td');
+            cell.textContent = String(category.counts[id]);
+            row.append(cell);
+          }
+          tbody.append(row);
+        }
+
+        const foot = document.createElement('tfoot');
+        const totals = document.createElement('tr');
+        const totalName = document.createElement('th');
+        totalName.scope = 'row';
+        totalName.textContent = 'All probes';
+        totals.append(totalName);
+        for (const id of core.ECHO_STABILITY_IDS) {
+          const cell = document.createElement('td');
+          cell.textContent = String(echo.summary.counts[id]);
+          totals.append(cell);
+        }
+        foot.append(totals);
+
+        table.append(caption, thead, tbody, foot);
+
+        // Five columns cannot fit a 360px viewport. Scrolling sideways beats
+        // clipping, and a scrollable region has to be keyboard reachable.
+        const frame = document.createElement('div');
+        frame.className = 'echo-table';
+        frame.tabIndex = 0;
+        frame.setAttribute('role', 'region');
+        frame.setAttribute('aria-label', 'Echo test outcomes by category');
+        frame.append(table);
+        return frame;
+      }
+
+      function echoSignalItem(signal) {
+        const item = document.createElement('li');
+        item.className = 'echo-signal';
+        item.dataset.stability = signal.stability;
+        item.dataset.probe = signal.id;
+
+        const title = document.createElement('h4');
+        const name = document.createElement('span');
+        name.textContent = signal.label;
+        const grade = document.createElement('span');
+        grade.className = 'echo-grade';
+        grade.textContent = `${ECHO_GRADE_MARK[signal.stability]} ${signal.stabilityLabel}`;
+        title.append(name, grade);
+
+        const evidence = document.createElement('p');
+        evidence.textContent = signal.evidence;
+
+        const meta = document.createElement('p');
+        meta.className = 'fine';
+        meta.textContent = [
+          core.CATEGORIES[signal.category].label,
+          `outcome each run: ${signal.statuses.map((status) => STATUS_TEXT[status] || status).join(', ')}`,
+          signal.valuesChanged ? 'the reading itself changed' : 'the reading itself did not change',
+        ].join(' \u00b7 ');
+
+        item.append(title, evidence, meta);
+
+        if (signal.okCount > 0) {
+          const readings = document.createElement('details');
+          readings.className = 'guidance';
+          const disclose = document.createElement('summary');
+          disclose.textContent = 'What each run read';
+          const list = document.createElement('ul');
+          list.className = 'echo-runs mono';
+          signal.displays.forEach((display, index) => {
+            const entry = document.createElement('li');
+            entry.textContent = `Run ${index + 1}: ${display === null ? 'nothing recorded' : display}`;
+            list.append(entry);
+          });
+          readings.append(disclose, list);
+          item.append(readings);
+        }
+
+        return item;
+      }
+
+      function renderEcho(echo) {
+        echoEls.body.replaceChildren();
+        const counts = echo.summary.counts;
+
+        const headline = document.createElement('p');
+        headline.className = 'score-headline';
+        const figure = document.createElement('span');
+        figure.className = 'score-figure';
+        figure.textContent = String(counts.stable);
+        const outOf = document.createElement('span');
+        outOf.className = 'score-outof';
+        outOf.textContent = ` of ${echo.summary.probeCount} signals answered identically in all ${echo.runCount} runs`;
+        headline.append(figure, outOf);
+
+        const band = document.createElement('p');
+        band.className = 'score-band';
+        band.textContent = `${counts.variable} varied between runs, ${counts.intermittent} changed outcome, and ${counts.unavailable} did not return enough evidence to judge either way.`;
+
+        const note = document.createElement('p');
+        note.className = 'mirror-note';
+        note.textContent = echo.exactValues.reason;
+
+        const semantics = document.createElement('p');
+        semantics.className = 'fine';
+        semantics.textContent = echo.semantics;
+
+        const catsHeading = document.createElement('h3');
+        catsHeading.textContent = 'By category';
+        const signalsHeading = document.createElement('h3');
+        signalsHeading.textContent = 'Signal by signal';
+
+        const list = document.createElement('ul');
+        list.className = 'echo-signals';
+        for (const signal of echo.signals) list.append(echoSignalItem(signal));
+
+        echoEls.body.append(
+          headline,
+          band,
+          note,
+          semantics,
+          catsHeading,
+          echoCategoryTable(echo),
+          signalsHeading,
+          list,
+        );
+
+        echoEls.status.textContent = `Echo test complete. ${echo.runCount} runs \u00b7 ${counts.stable} of ${echo.summary.probeCount} signals identical every time \u00b7 ${echo.summary.changedCount} whose reading changed.`;
+      }
+
+      echoEls.run.addEventListener('click', () => {
+        runEchoTest();
+      });
+      echoEls.clear.addEventListener('click', clearEcho);
+      echoEls.save.addEventListener('click', exportEcho);
+      echoEls.includeValues.addEventListener('change', () => {
+        if (!echoState.summary) return;
+        echoEls.status.textContent =
+          echoEls.includeValues.checked === true
+            ? 'The saved file will include all exact readings that the runs returned, which may describe this device and browser.'
+            : 'The saved file will record how each signal behaved, without the exact readings.';
+      });
+
+      /* echo test: end ----------------------------------------------------- */
 
       els.rerun.addEventListener('click', () => {
         runProbes();

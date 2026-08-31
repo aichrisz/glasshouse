@@ -2049,6 +2049,756 @@ test('readme/mirror: documents the workflow, bound, schema and honest limits', a
 });
 
 // ---------------------------------------------------------------------------
+// v1.2 ECHO TEST -- repeating the same fixed probe set several times in one
+// session and reporting, per signal, whether the answers held still. Fixtures
+// go through the tested normalization path, so a test can never assert against
+// a snapshot shape the app does not actually produce.
+// ---------------------------------------------------------------------------
+
+const echoRun = (raw) => core.normalizeSnapshot(raw);
+
+// slice 36 -- the whole point of the experiment is one honest classification
+// per signal. A status transition outranks any value comparison, and a single
+// reading is never evidence of stability.
+test('core/echo: classifies repeated readings as stable, variable, intermittent or unavailable', () => {
+  assert.equal(typeof core.summarizeEchoRuns, 'function', 'summarizeEchoRuns must be a function');
+  assert.equal(core.ECHO_RUN_COUNT, 3, 'the default experiment is three sequential runs');
+  assert.deepEqual(
+    [...core.ECHO_STABILITY_IDS],
+    ['stable', 'variable', 'intermittent', 'unavailable'],
+    'the four published classifications, in reporting order',
+  );
+  for (const id of core.ECHO_STABILITY_IDS) {
+    const grade = core.ECHO_STABILITY[id];
+    assert.equal(grade.id, id, `${id} must declare its own id`);
+    assert.equal(typeof grade.label, 'string', `${id} needs a label`);
+    assert.ok(grade.summary.length > 30, `${id} needs an explanation a reader can act on`);
+    assert.doesNotMatch(
+      grade.summary,
+      /recognis|later/i,
+      `${id} must describe only this immediate experiment, not future recognition`,
+    );
+  }
+
+  const runs = [
+    echoRun([
+      { id: 'cores', value: 8 },
+      { id: 'languages', value: ['en-GB'] },
+      { id: 'fonts', value: ['Georgia', 'Menlo'] },
+      { id: 'canvas', value: { digest: 'a1b2c3d4e5f6' } },
+      { id: 'memory', value: 8 },
+    ]),
+    echoRun([
+      { id: 'cores', value: 8 },
+      { id: 'languages', value: ['en-GB', 'cy'] },
+      { id: 'fonts', value: ['Georgia', 'Menlo'] },
+      { id: 'canvas', status: 'denied', reason: 'canvas readback blocked' },
+    ]),
+    echoRun([
+      { id: 'cores', value: 8 },
+      { id: 'languages', value: ['en-GB', 'de'] },
+      { id: 'fonts', value: ['Menlo', 'Georgia'] },
+      { id: 'canvas', value: { digest: 'ffffffffffff' } },
+    ]),
+  ];
+
+  const echo = core.summarizeEchoRuns(runs);
+  assert.equal(echo.echoVersion, core.ECHO_VERSION);
+  assert.equal(echo.runCount, 3);
+
+  const sig = Object.fromEntries(echo.signals.map((s) => [s.id, s]));
+
+  // every successful reading equal, no transition -> stable
+  assert.equal(sig.cores.stability, 'stable');
+  assert.equal(sig.cores.okCount, 3);
+  assert.deepEqual(sig.cores.statuses, ['ok', 'ok', 'ok']);
+  assert.equal(sig.cores.statusChanged, false);
+  assert.equal(sig.cores.distinctReadings, 1);
+  assert.equal(sig.cores.valuesChanged, false);
+  assert.equal(sig.cores.label, core.getProbe('cores').label, 'labels come from the catalog');
+  assert.equal(sig.cores.category, 'hardware');
+  assert.equal(sig.cores.weight, core.getProbe('cores').weight);
+
+  // at least one successful reading differs, no transition -> variable
+  assert.equal(sig.languages.stability, 'variable');
+  assert.equal(sig.languages.okCount, 3);
+  assert.equal(sig.languages.distinctReadings, 3);
+  assert.equal(sig.languages.valuesChanged, true);
+  assert.equal(sig.languages.statusChanged, false);
+
+  // a list that only changed order is still a different reading
+  assert.equal(sig.fonts.stability, 'variable');
+  assert.equal(sig.fonts.distinctReadings, 2, 'two of the three runs agreed');
+
+  // a status transition outranks any value comparison
+  assert.equal(sig.canvas.stability, 'intermittent');
+  assert.equal(sig.canvas.statusChanged, true);
+  assert.deepEqual(sig.canvas.statuses, ['ok', 'denied', 'ok']);
+
+  // so does a probe that stopped being exposed at all
+  assert.equal(sig.memory.stability, 'intermittent');
+  assert.deepEqual(sig.memory.statuses, ['ok', 'unsupported', 'unsupported']);
+
+  // every outcome transition is intermittent, even when neither outcome was readable
+  const blockedTransitions = core.summarizeEchoRuns([
+    echoRun([{ id: 'webgl', status: 'denied', reason: 'blocked' }]),
+    echoRun([{ id: 'webgl', status: 'error', reason: 'failed' }]),
+  ]);
+  assert.equal(
+    blockedTransitions.signals.find((s) => s.id === 'webgl').stability,
+    'intermittent',
+    'denied → error is still an outcome transition',
+  );
+  assert.match(core.ECHO_STABILITY.intermittent.summary, /any|outcome/i);
+  assert.doesNotMatch(
+    core.ECHO_STABILITY.intermittent.summary,
+    /readable in one|readable once/i,
+    'the published definition must include non-readable outcome transitions',
+  );
+
+  // no successful reading and no transition -> nothing to compare
+  assert.equal(sig.screen.stability, 'unavailable');
+  assert.equal(sig.screen.okCount, 0);
+  assert.equal(sig.screen.statusChanged, false);
+  assert.equal(sig.screen.distinctReadings, 0);
+
+  // one successful reading and no transition is not evidence either
+  const single = core.summarizeEchoRuns([runs[0]]);
+  assert.equal(single.runCount, 1);
+  const singleCores = single.signals.find((s) => s.id === 'cores');
+  assert.equal(singleCores.okCount, 1);
+  assert.equal(singleCores.statusChanged, false);
+  assert.equal(singleCores.stability, 'unavailable', 'one reading cannot be called stable');
+
+  // nested and mapped values compare deterministically, not by key order
+  const mapSignal = (value) => ({
+    signals: [{ id: 'ua', status: 'ok', detail: 'full', value, display: 'ua', reason: null }],
+  });
+  const reordered = core.summarizeEchoRuns([
+    mapSignal({ userAgent: 'Mozilla/5.0', platform: 'Linux', vendor: null, engineHint: 'Gecko' }),
+    mapSignal({ engineHint: 'Gecko', vendor: null, platform: 'Linux', userAgent: 'Mozilla/5.0' }),
+  ]);
+  assert.equal(
+    reordered.signals.find((s) => s.id === 'ua').stability,
+    'stable',
+    'key insertion order must never read as a change',
+  );
+  const changedNested = core.summarizeEchoRuns([
+    mapSignal({ userAgent: 'Mozilla/5.0', platform: 'Linux' }),
+    mapSignal({ userAgent: 'Mozilla/5.0', platform: 'Windows' }),
+  ]);
+  assert.equal(changedNested.signals.find((s) => s.id === 'ua').stability, 'variable');
+
+  // a snapshot that never mentions a probe is an outcome, not a crash
+  assert.equal(
+    reordered.signals.find((s) => s.id === 'cores').stability,
+    'unavailable',
+    'a probe absent from every run has nothing to compare',
+  );
+
+  // purely functional
+  const frozen = core.stableStringify(runs);
+  assert.deepEqual(core.summarizeEchoRuns(runs), echo);
+  assert.equal(core.stableStringify(runs), frozen, 'summarizing must not mutate its input');
+  assert.throws(() => core.summarizeEchoRuns([]), /non-empty/);
+  assert.throws(() => core.summarizeEchoRuns('nope'), /non-empty/);
+  assert.throws(() => core.summarizeEchoRuns([{ signals: 'nope' }]), /signals array/);
+});
+
+// slice 37 -- the headline of the experiment is a derived tally, not a new
+// measurement. Category summaries and overall counts must fall out of the
+// per-signal classifications and nothing else.
+test('core/echo: derives category summaries and totals in catalog order', () => {
+  const runs = [
+    echoRun([
+      { id: 'cores', value: 8 },
+      { id: 'memory', value: 8 },
+      { id: 'languages', value: ['en-GB'] },
+      { id: 'timezone', value: { timeZone: 'Europe/London' } },
+      { id: 'canvas', value: { digest: 'a1b2c3d4e5f6' } },
+      { id: 'webgl', value: { renderer: 'Intel Iris Plus Graphics 640' } },
+      { id: 'fonts', value: ['Georgia'] },
+    ]),
+    echoRun([
+      { id: 'cores', value: 8 },
+      { id: 'memory', value: 8 },
+      { id: 'languages', value: ['en-GB'] },
+      { id: 'timezone', value: { timeZone: 'Europe/London' } },
+      { id: 'canvas', value: { digest: 'b2c3d4e5f6a1' } },
+      { id: 'webgl', status: 'denied', reason: 'webgl disabled' },
+      { id: 'fonts', value: ['Georgia'] },
+    ]),
+  ];
+
+  const echo = core.summarizeEchoRuns(runs);
+
+  assert.deepEqual(
+    echo.signals.map((s) => s.id),
+    core.PROBE_CATALOG.map((p) => p.id),
+    'signals stay in catalog order',
+  );
+  assert.deepEqual(
+    echo.categories.map((c) => c.id),
+    Object.keys(core.CATEGORIES),
+    'every category is always reported, in declaration order',
+  );
+
+  const cats = Object.fromEntries(echo.categories.map((c) => [c.id, c]));
+  assert.equal(cats.rendering.label, core.CATEGORIES.rendering.label);
+  assert.equal(cats.rendering.signalCount, 3, 'canvas, webgl and fonts');
+  assert.deepEqual(cats.rendering.counts, {
+    stable: 1,
+    variable: 1,
+    intermittent: 1,
+    unavailable: 0,
+  });
+  assert.deepEqual(cats.hardware.counts, {
+    stable: 2,
+    variable: 0,
+    intermittent: 0,
+    unavailable: 0,
+  });
+  assert.deepEqual(cats.display.counts, {
+    stable: 0,
+    variable: 0,
+    intermittent: 0,
+    unavailable: 2,
+  });
+
+  // every category tally must account for exactly its own catalog probes
+  for (const category of echo.categories) {
+    const members = core.PROBE_CATALOG.filter((probe) => probe.category === category.id);
+    assert.equal(category.signalCount, members.length, `${category.id} probe count`);
+    assert.equal(
+      core.ECHO_STABILITY_IDS.reduce((sum, id) => sum + category.counts[id], 0),
+      members.length,
+      `${category.id} counts must add up to its probe count`,
+    );
+    assert.deepEqual(Object.keys(category.counts), [...core.ECHO_STABILITY_IDS]);
+  }
+
+  // and the overall tally must be the sum of the category tallies
+  assert.equal(echo.summary.probeCount, core.PROBE_CATALOG.length);
+  assert.equal(echo.summary.runCount, 2);
+  for (const id of core.ECHO_STABILITY_IDS) {
+    assert.equal(
+      echo.summary.counts[id],
+      echo.categories.reduce((sum, category) => sum + category.counts[id], 0),
+      `overall ${id} count must match the categories`,
+    );
+    assert.equal(
+      echo.summary.counts[id],
+      echo.signals.filter((s) => s.stability === id).length,
+      `overall ${id} count must match the signals`,
+    );
+  }
+  assert.equal(
+    core.ECHO_STABILITY_IDS.reduce((sum, id) => sum + echo.summary.counts[id], 0),
+    core.PROBE_CATALOG.length,
+    'every probe is classified exactly once',
+  );
+  assert.equal(echo.summary.changedCount, 1, 'only canvas changed its reading');
+
+  // the experiment states its own semantics and never claims more
+  assert.equal(echo.semantics, core.ECHO_SEMANTICS);
+  assert.ok(echo.semantics.length > 80, 'the semantics must be a readable statement');
+  for (const overclaim of [
+    'unique',
+    'identifiab',
+    'entropy',
+    'probability',
+    'guarantee',
+    'anonymous',
+    'protected',
+  ]) {
+    assert.ok(
+      !new RegExp(overclaim, 'i').test(echo.semantics),
+      `the echo semantics must not claim "${overclaim}"`,
+    );
+  }
+
+  // exact values exist only when at least one run actually returned a reading
+  assert.equal(echo.exactValues.available, true);
+  assert.ok(echo.exactValues.reason.length > 30, 'availability must explain itself');
+  assert.match(echo.exactValues.reason, /at least one/i);
+  assert.doesNotMatch(
+    echo.exactValues.reason,
+    /(?:each|every) run/i,
+    'global metadata must not claim partial readings exist for every run',
+  );
+  const nothing = core.summarizeEchoRuns([echoRun([]), echoRun([])]);
+  assert.equal(nothing.exactValues.available, false);
+  assert.match(nothing.exactValues.reason, /no|nothing/i);
+  assert.equal(nothing.summary.counts.unavailable, core.PROBE_CATALOG.length);
+
+  // per-signal evidence is plain language derived from counts, never a value
+  const sig = Object.fromEntries(echo.signals.map((s) => [s.id, s]));
+  assert.match(sig.cores.evidence, /identical/i);
+  assert.match(sig.canvas.evidence, /2 different values/);
+  assert.match(sig.webgl.evidence, /outcome changed/i);
+  assert.match(sig.screen.evidence, /nothing to compare/i);
+  for (const signal of echo.signals) {
+    assert.ok(signal.evidence.length > 25, `${signal.id} needs readable evidence`);
+    assert.ok(
+      !signal.evidence.includes('Europe/London') && !signal.evidence.includes('Georgia'),
+      `${signal.id} evidence must not quote an observed value`,
+    );
+  }
+});
+
+// slice 38 -- the saved experiment must be safe to hand to someone else by
+// default: it records how each signal behaved without recording what it read.
+test('core/echo: the export omits exact values unless opted in', () => {
+  const runs = [
+    echoRun([
+      { id: 'ua', value: { userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', platform: 'Linux' } },
+      { id: 'timezone', value: { timeZone: 'Europe/London', utcOffsetMinutes: 60 } },
+      { id: 'languages', value: ['en-GB'] },
+      { id: 'webgl', value: { renderer: 'Intel Iris Plus Graphics 640' } },
+    ]),
+    echoRun([
+      { id: 'ua', value: { userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', platform: 'Linux' } },
+      { id: 'timezone', value: { timeZone: 'Europe/London', utcOffsetMinutes: 60 } },
+      { id: 'languages', value: ['en-GB', 'cy'] },
+      { id: 'webgl', status: 'denied', reason: 'webgl disabled' },
+    ]),
+  ];
+  const echo = core.summarizeEchoRuns(runs);
+
+  const closed = core.buildEchoExport(echo);
+  const closedJson = core.stableStringify(closed);
+
+  assert.equal(closed.app, 'GLASSHOUSE');
+  assert.equal(closed.kind, 'echo-test');
+  assert.equal(closed.echoVersion, core.ECHO_VERSION);
+  assert.equal(closed.runCount, 2);
+  assert.equal(closed.includesExactValues, false, 'redaction is the default');
+  assert.equal(closed.redaction.applied, true);
+  assert.deepEqual(closed.redaction.removedKeys, [...core.ECHO_REDACTED_KEYS]);
+  assert.deepEqual([...core.ECHO_REDACTED_KEYS], ['values', 'displays']);
+  assert.ok(closed.redaction.note.includes('deliberately'), 'the omission is declared deliberate');
+  assert.ok(closed.notice.length > 30, 'the file states it was generated locally');
+  assert.equal(closed.semantics, core.ECHO_SEMANTICS);
+  assert.equal(closed.valuesWarning, null, 'a redacted file needs no device-detail warning');
+
+  for (const leak of ['Mozilla', 'Europe/London', 'en-GB', 'Intel Iris', 'Linux']) {
+    assert.ok(!closedJson.includes(leak), `a default echo export must not contain ${leak}`);
+  }
+
+  // the audit trail survives redaction, including the fact that a reading changed
+  const languages = closed.signals.find((s) => s.id === 'languages');
+  assert.equal(languages.valuesOmitted, true);
+  assert.ok(!('values' in languages), 'the key is removed, not blanked');
+  assert.ok(!('displays' in languages), 'the rendered readings are removed too');
+  assert.equal(languages.stability, 'variable', 'that it changed is structural');
+  assert.equal(languages.valuesChanged, true);
+  assert.equal(languages.distinctReadings, 2);
+  assert.deepEqual(languages.statuses, ['ok', 'ok']);
+  assert.ok(languages.evidence.length > 25, 'the evidence sentence survives redaction');
+  assert.deepEqual(
+    closed.signals.map((s) => s.id),
+    core.PROBE_CATALOG.map((p) => p.id),
+    'the export keeps catalog order',
+  );
+  assert.deepEqual(
+    closed.categories.map((c) => c.id),
+    Object.keys(core.CATEGORIES),
+    'category summaries are exported in full',
+  );
+  assert.deepEqual(closed.summary.counts, echo.summary.counts);
+
+  // export metadata must describe the redaction truthfully
+  assert.equal(closed.exactValues.available, true, 'available at the source, omitted by choice');
+  assert.equal(closed.exactValues.included, false);
+  assert.match(closed.exactValues.reason, /omitted from this export/i);
+  assert.doesNotMatch(closed.exactValues.reason, /can be shown|(?:each|every) run/i);
+  assert.match(closed.exactValues.reason, /at least one/i);
+
+  // explicit opt-in, and only a literal boolean
+  const open = core.buildEchoExport(echo, { includeExactValues: true });
+  assert.equal(open.includesExactValues, true);
+  assert.equal(open.redaction.applied, false);
+  assert.deepEqual(open.redaction.removedKeys, []);
+  assert.equal(open.exactValues.included, true);
+  assert.deepEqual(open.signals.find((s) => s.id === 'languages').values, [
+    ['en-GB'],
+    ['en-GB', 'cy'],
+  ]);
+  assert.equal(open.signals.find((s) => s.id === 'ua').values[0].userAgent, 'Mozilla/5.0 (X11; Linux x86_64)');
+  assert.equal(open.signals.find((s) => s.id === 'languages').valuesOmitted, undefined);
+  assert.equal(typeof open.valuesWarning, 'string');
+  assert.ok(
+    /device|browser/i.test(open.valuesWarning) && open.valuesWarning.length > 60,
+    'an opted-in file must warn that it may reveal device or browser details',
+  );
+  assert.doesNotMatch(
+    open.valuesWarning,
+    /(?:each|every) run/i,
+    'the warning must not claim blocked or failed outcomes produced values',
+  );
+  assert.match(
+    open.valuesWarning,
+    /readings? (?:that (?:the )?runs returned|that exist)/i,
+    'the warning must describe only exact readings that exist',
+  );
+
+  for (const sneaky of ['true', 1, 'yes', {}, [1], null]) {
+    assert.equal(
+      core.buildEchoExport(echo, { includeExactValues: sneaky }).includesExactValues,
+      false,
+      `only boolean true opts in, got ${JSON.stringify(sneaky)}`,
+    );
+  }
+
+  // opting in cannot conjure values that no run ever produced
+  const nothing = core.summarizeEchoRuns([echoRun([]), echoRun([])]);
+  const forced = core.buildEchoExport(nothing, { includeExactValues: true });
+  assert.equal(forced.includesExactValues, false);
+  assert.equal(forced.exactValues.available, false);
+  assert.equal(forced.valuesWarning, null);
+  assert.match(forced.redaction.note, /no exact values|nothing exact/i);
+  assert.equal(forced.summary.counts.unavailable, core.PROBE_CATALOG.length);
+
+  // deterministic and non-mutating
+  const frozen = core.stableStringify(echo);
+  assert.equal(core.stableStringify(core.buildEchoExport(echo)), closedJson);
+  assert.equal(core.stableStringify(echo), frozen, 'exporting must not mutate the summary');
+  assert.throws(() => core.buildEchoExport(null), /echo/i);
+  assert.throws(() => core.buildEchoExport({ signals: [] }), /echo/i);
+});
+
+// slice 39 -- ECHO TEST needs real, labelled, keyboard-operable controls, its
+// own progress element and its own polite live region, and it must delegate
+// every decision to the tested core.
+test('html/echo: exposes accessible controls, progress and its own live region', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /<section[^>]*aria-labelledby="echo-heading"/i, 'needs a labelled section');
+  assert.match(html, /<h2\b[^>]*id="echo-heading"[^>]*>[^<]*Echo Test/i, 'needs an Echo Test heading');
+
+  for (const id of [
+    'echo-run',
+    'echo-clear',
+    'echo-save',
+    'echo-include-values',
+    'echo-status',
+    'echo-progress',
+    'echo-body',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `missing control #${id}`);
+  }
+  for (const id of ['echo-run', 'echo-clear', 'echo-save']) {
+    const tag = html.match(new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`, 'i'));
+    assert.ok(tag, `${id} must be a button`);
+    assert.match(tag[0], /type="button"/, `${id} needs an explicit type="button"`);
+  }
+  assert.match(html, /<input\b[^>]*type="checkbox"[^>]*id="echo-include-values"/i);
+  assert.match(html, /<label\b[^>]*for="echo-include-values"/i, 'the opt-in needs a real label');
+  assert.match(html, /<progress\b[^>]*id="echo-progress"/i, 'the experiment needs visible progress');
+  assert.match(html, /<label\b[^>]*for="echo-progress"/i, 'the progress element needs a label');
+
+  // its own status region, so an experiment message never overwrites another
+  assert.match(
+    html,
+    /id="echo-status"[^>]*role="status"[^>]*aria-live="polite"/i,
+    'the experiment needs its own polite live region',
+  );
+  assert.ok(
+    (html.match(/aria-live="polite"/g) || []).length >= 3,
+    'the scan, the import and the experiment each need a live region',
+  );
+
+  // the opt-in ships unchecked, so consent is never pre-given
+  assert.ok(
+    !/id="echo-include-values"[^>]*\schecked/i.test(html),
+    'the exact-values opt-in must ship unchecked',
+  );
+
+  // the page states the run count and every classification it can report
+  assert.ok(
+    html.includes(`${core.ECHO_RUN_COUNT} runs`) || html.includes(`${core.ECHO_RUN_COUNT} sequential`),
+    `the page must state that the experiment is ${core.ECHO_RUN_COUNT} runs`,
+  );
+  for (const id of core.ECHO_STABILITY_IDS) {
+    assert.ok(html.includes(core.ECHO_STABILITY[id].label), `the page must name the "${id}" outcome`);
+  }
+  assert.match(html, /Run 1 of/i, 'progress must be described in plain words');
+  assert.doesNotMatch(
+    html,
+    /exact reading from every run/i,
+    'no ECHO copy may claim blocked or failed outcomes produced exact readings',
+  );
+  assert.doesNotMatch(
+    html.slice(html.indexOf('<section class="panel" id="echo-panel"'), html.indexOf('<section class="panel" aria-labelledby="stored-heading"')),
+    /readable (?:in one|once)/i,
+    'the panel must describe all outcome transitions truthfully',
+  );
+  const echoPanel = html.slice(html.indexOf('<section class="panel" id="echo-panel"'), html.indexOf('<section class="panel" aria-labelledby="stored-heading"'));
+  assert.doesNotMatch(
+    echoPanel,
+    /recognis(?:e|able)|stable later/i,
+    'three immediate runs must not be presented as proof of later recognition',
+  );
+
+  assert.equal((html.match(/<h1\b/g) || []).length, 1, 'still exactly one h1');
+  assert.ok(!/onclick=/i.test(html), 'still no inline event handlers');
+});
+
+// slice 40 -- the strongest claims ECHO TEST makes are that it adds no probe,
+// persists nothing, and stops the moment consent is withdrawn. All three have
+// to be checked structurally over a delimited region, not taken on trust.
+test('html/echo: repeats the existing probe path, in memory only, and cancels a cleared run', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const script = html.slice(html.indexOf('<script type="module">'));
+  const start = html.indexOf('/* echo test: begin');
+  const end = html.indexOf('/* echo test: end');
+  assert.notEqual(start, -1, 'the echo-test code must be delimited so it can be audited');
+  assert.ok(end > start, 'the echo-test region must be closed');
+  const region = html.slice(start, end);
+  assert.ok(region.length > 1500, 'the region looks suspiciously small');
+
+  // nothing in the region may persist a repeated reading
+  for (const persistence of [
+    'localStorage',
+    'sessionStorage',
+    'setItem',
+    'removeItem',
+    'indexedDB',
+    'openDatabase',
+    'cookie',
+    'caches',
+    'showSaveFilePicker',
+    'getDirectoryHandle',
+  ]) {
+    assert.ok(!region.includes(persistence), `an echo reading must never reach ${persistence}`);
+  }
+
+  // nor send one anywhere
+  for (const outward of [
+    'fetch',
+    'XMLHttpRequest',
+    'WebSocket',
+    'EventSource',
+    'sendBeacon',
+    'FormData',
+    'action=',
+    'postMessage',
+    'BroadcastChannel',
+    'src=',
+    'mailto:',
+  ]) {
+    assert.ok(!region.includes(outward), `the echo path must not reference ${outward}`);
+  }
+
+  // no new probe: the experiment reuses the one collection path the scan uses
+  assert.ok(
+    script.includes('async function collectObservations('),
+    'the repeated runs must share the ordinary scan\u2019s collection path',
+  );
+  assert.equal(
+    (script.match(/collectors\[probe\.id\]\(\)/g) || []).length,
+    1,
+    'exactly one place may invoke a probe collector',
+  );
+  assert.ok(
+    region.includes('collectObservations('),
+    'the echo runner must call the shared collector, not a copy',
+  );
+  assert.ok(!region.includes('collectors['), 'the echo region must not reach into the collectors');
+  assert.equal(
+    (script.match(/const collectors = \{/g) || []).length,
+    1,
+    'there is exactly one probe collector table',
+  );
+
+  // every decision is delegated to the tested core
+  for (const fn of ['summarizeEchoRuns', 'buildEchoExport', 'normalizeSnapshot', 'stableStringify']) {
+    assert.ok(region.includes(`core.${fn}(`), `the echo region must call core.${fn}()`);
+  }
+  for (const forbidden of [
+    'function summarizeEchoRuns',
+    'function buildEchoExport',
+    'function classifyEchoReadings',
+    'ECHO_STABILITY = ',
+    'ECHO_REDACTED_KEYS = ',
+    'ECHO_SEMANTICS = ',
+  ]) {
+    assert.ok(!script.includes(forbidden), `the page must not reimplement ${forbidden}`);
+  }
+  assert.equal(
+    (region.match(/core\.summarizeEchoRuns\(/g) || []).length,
+    1,
+    'exactly one place may produce the current echo summary',
+  );
+
+  // the runs live in one module-scope object, so a reload discards them
+  assert.ok(
+    /const echoState = \{ runs: null, summary: null \};/.test(region),
+    'echo runs must live in one module-scope object with no initial value',
+  );
+  assert.ok(region.includes('let echoRunId = 0'), 'the runner needs a cancellation generation');
+
+  // the run is bounded, sequential, and defaults to the published run count
+  assert.ok(
+    region.includes('core.ECHO_RUN_COUNT'),
+    'the run count must come from the published catalog constant',
+  );
+  const runStart = region.indexOf('async function runEchoTest()');
+  assert.notEqual(runStart, -1, 'the region needs a single run entry point');
+  const runBody = region.slice(runStart, region.indexOf('function clearEcho(', runStart));
+  assert.ok(
+    runBody.includes('const runId = ++echoRunId'),
+    'each experiment must claim its own generation',
+  );
+  assert.ok(
+    (runBody.match(/if \(runId !== echoRunId\) return;/g) || []).length >= 2,
+    'a stale run must abandon itself after every await, not only at the end',
+  );
+  const commit = runBody.indexOf('echoState.summary = core.summarizeEchoRuns(');
+  const guardBeforeCommit = runBody.lastIndexOf('if (runId !== echoRunId) return;', commit);
+  assert.ok(commit !== -1, 'the runner must commit a summary');
+  assert.ok(
+    guardBeforeCommit !== -1 && guardBeforeCommit < commit,
+    'a cancelled run must not repopulate state',
+  );
+  const enable = runBody.indexOf('echoEls.save.disabled = false');
+  assert.ok(enable > guardBeforeCommit, 'a cancelled run must not enable the export either');
+
+  // conflicting controls are locked while a run is in flight, and Clear is not
+  assert.ok(
+    runBody.includes('echoEls.run.disabled = true') && runBody.includes('els.rerun.disabled = true'),
+    'the experiment must lock the controls that would collide with it',
+  );
+  assert.ok(
+    !/echoEls\.clear\.disabled = true/.test(region),
+    'Clear must stay operable so consent can be withdrawn immediately',
+  );
+  assert.ok(
+    runBody.includes('finally') &&
+      runBody.includes('echoEls.run.disabled = false') &&
+      runBody.includes('els.rerun.disabled = false'),
+    'the runner must always unlock the controls it locked',
+  );
+
+  // clearing discards everything and invalidates any run still in flight
+  const clearStart = region.indexOf('function clearEcho(');
+  const clearBody = region.slice(clearStart, region.indexOf('function exportEcho(', clearStart));
+  assert.ok(clearBody.includes('echoRunId += 1'), 'clearing must cancel a run still in flight');
+  assert.ok(clearBody.includes('discardEcho()'), 'clearing must discard every recorded run');
+  assert.ok(clearBody.includes('replaceChildren()'), 'clearing must empty the result region');
+  assert.ok(clearBody.includes('echoEls.progress.value = 0'), 'clearing must reset the progress');
+  const discardBody = region.slice(
+    region.indexOf('function discardEcho()'),
+    region.indexOf('async function runEchoTest()'),
+  );
+  assert.ok(discardBody.includes('echoState.runs = null'), 'discarding must drop the snapshots');
+  assert.ok(discardBody.includes('echoState.summary = null'), 'discarding must drop the summary');
+  assert.ok(
+    discardBody.includes('echoEls.save.disabled = true'),
+    'discarding must withdraw the export',
+  );
+
+  // the export path is the tested, redaction-aware core one
+  assert.ok(region.includes('core.buildEchoExport('), 'export must use the tested builder');
+  assert.ok(region.includes('createObjectURL'), 'saving is a local file download');
+  assert.ok(
+    region.includes('echoEls.includeValues.checked === true'),
+    'the exact-values opt-in must be read as a strict boolean',
+  );
+});
+
+// slice 41 -- the README must describe ECHO TEST as it actually behaves, with
+// its run count, its classification vocabulary and its file names derived from
+// the code rather than written from memory.
+test('readme/echo: documents the experiment, its classifications and its limits', async () => {
+  const readme = await readFile(new URL('./README.md', import.meta.url), 'utf8');
+
+  const start = readme.search(/^##\s.*Echo Test/im);
+  assert.notEqual(start, -1, 'README needs an "Echo Test" section');
+  const rest = readme.slice(start + 1);
+  const next = rest.search(/^##\s/m);
+  const section = next === -1 ? rest : rest.slice(0, next);
+  assert.ok(section.length > 1200, 'the Echo Test section looks suspiciously thin');
+
+  // the experiment, by the numbers the code actually uses
+  assert.ok(
+    section.includes(`${core.ECHO_RUN_COUNT} sequential runs`),
+    `the section must state that the default experiment is ${core.ECHO_RUN_COUNT} sequential runs`,
+  );
+  assert.ok(
+    section.includes(`${core.PROBE_CATALOG.length}`),
+    'the section must state that it reuses the published probe set',
+  );
+
+  // the whole classification vocabulary, by code and by label
+  for (const id of core.ECHO_STABILITY_IDS) {
+    assert.ok(section.includes(`\`${id}\``), `the section must document the \`${id}\` outcome`);
+    assert.ok(
+      section.includes(core.ECHO_STABILITY[id].label),
+      `the section must name the "${core.ECHO_STABILITY[id].label}" label the interface shows`,
+    );
+  }
+  assert.ok(
+    /outranks|takes precedence|before any value/i.test(section),
+    'the section must state that a status change outranks any value comparison',
+  );
+
+  // the controls, by the names they actually carry
+  for (const control of ['Start echo test', 'Save echo JSON', 'Clear echo test']) {
+    assert.ok(readme.includes(control), `README must document the "${control}" control`);
+  }
+  assert.ok(
+    readme.includes('Include all exact readings that the runs returned'),
+    'README must document the exact-values opt-in',
+  );
+
+  // the export, including the keys redaction removes and both file names
+  for (const key of core.ECHO_REDACTED_KEYS) {
+    assert.ok(section.includes(`\`${key}\``), `the section must name the removed key \`${key}\``);
+  }
+  assert.ok(
+    readme.includes('glasshouse-echo-redacted.json'),
+    'README must name the default echo file',
+  );
+  assert.ok(
+    readme.includes('glasshouse-echo-with-values.json'),
+    'README must name the opted-in echo file',
+  );
+  assert.ok(
+    /literal/i.test(section) && /boolean/i.test(section),
+    'the section must state that only a literal boolean opts in',
+  );
+
+  // the privacy boundary, restated for the experiment specifically
+  for (const claim of ['never written to', 'reload']) {
+    assert.ok(section.includes(claim), `the section must state that runs are transient (${claim})`);
+  }
+  assert.ok(
+    /cancel|withdraw/i.test(section),
+    'the section must state that a run can be cancelled while it is in flight',
+  );
+  assert.ok(
+    /no new probe|adds no probe|same probe/i.test(section),
+    'the section must state that the experiment adds no probe',
+  );
+
+  // and it must not be sold as something it is not
+  for (const overclaim of [
+    'proves',
+    'how unique',
+    'identifies you',
+    'more private than',
+    'cannot be tracked',
+    'fingerprint score',
+  ]) {
+    assert.ok(
+      !new RegExp(overclaim, 'i').test(section),
+      `the Echo Test section must not claim "${overclaim}"`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // runner
 // ---------------------------------------------------------------------------
 async function main() {

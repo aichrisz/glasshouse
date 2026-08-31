@@ -1464,3 +1464,406 @@ PASS  core/import: rejects missing, duplicated and unknown probe ids
 $ node verify.mjs --only 'comparison export omits exact values'
 PASS  core/mirror: the comparison export omits exact values unless opted in
 ```
+
+---
+
+# v1.2 — ECHO TEST
+
+One coherent feature added by strict vertical RED → GREEN: repeat the existing
+probe set several times in one session and report, per signal, whether the
+answers held still. Six slices, each a focused failing check first.
+
+Baseline before slice 36 (`HANDOFF.md` was present in the working tree, which is
+why `repo/hygiene` is red throughout this run; it is removed at the end):
+
+```
+$ node verify.mjs
+...
+FAIL  repo/hygiene: ships only the intended files, with no residue: Expected values to be strictly deep-equal
+
+verify: 34 passed, 1 failed, 35 selected, 35 defined
+```
+
+---
+
+## Slice 36 — stability classification
+
+RED
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+FAIL  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable: summarizeEchoRuns must be a function | + actual - expected |  | + 'undefined'
+
+verify: 0 passed, 1 failed, 1 selected, 36 defined (filter: core/echo: classifies)
+exit=1
+```
+
+GREEN — added `ECHO_VERSION`, `ECHO_RUN_COUNT` (3), `ECHO_STABILITY`,
+`ECHO_STABILITY_IDS`, `classifyEchoReadings()`, `echoEvidence()` and
+`summarizeEchoRuns()`. Values are compared with the existing
+`stableStringify()`, so key order is never mistaken for a change; a status
+transition outranks any value comparison; a single reading is `unavailable`
+rather than `stable`.
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+PASS  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable
+
+verify: 1 passed, 0 failed, 1 selected, 36 defined (filter: core/echo: classifies)
+exit=0
+
+$ node verify.mjs --only 'core/purity'
+PASS  core/purity: core.mjs references no browser global, clock or randomness
+```
+
+---
+
+## Slice 37 — category summaries and overall counts
+
+RED
+
+```
+$ node verify.mjs --only 'core/echo: derives'
+FAIL  core/echo: derives category summaries and totals in catalog order: Cannot read properties of undefined (reading 'map')
+
+verify: 0 passed, 1 failed, 1 selected, 37 defined (filter: core/echo: derives)
+exit=1
+```
+
+GREEN — `summarizeEchoRuns()` now derives per-category tallies and one overall
+tally from the per-signal classifications only, publishes `ECHO_SEMANTICS`, and
+declares whether exact values exist at all. Every category's four counts add up
+to its own probe count, and the overall counts add up to 14.
+
+```
+$ node verify.mjs --only 'core/echo'
+PASS  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable
+PASS  core/echo: derives category summaries and totals in catalog order
+
+verify: 2 passed, 0 failed, 2 selected, 37 defined (filter: core/echo)
+exit=0
+```
+
+---
+
+## Slice 38 — redacted export and literal-boolean consent
+
+RED
+
+```
+$ node verify.mjs --only 'core/echo: the export'
+FAIL  core/echo: the export omits exact values unless opted in: core.buildEchoExport is not a function
+
+verify: 0 passed, 1 failed, 1 selected, 38 defined (filter: core/echo: the export)
+exit=1
+```
+
+GREEN — added `ECHO_REDACTED_KEYS` (`values`, `displays`) and
+`buildEchoExport()`. Redaction is the default and removes both keys outright,
+replacing them with `valuesOmitted: true`; only a literal boolean `true` opts
+in; opting in cannot conjure values no run produced; an opted-in file carries a
+`valuesWarning` about device detail, and `exactValues` states `available` and
+`included` truthfully in both directions.
+
+```
+$ node verify.mjs --only 'core/echo: the export'
+PASS  core/echo: the export omits exact values unless opted in
+
+verify: 1 passed, 0 failed, 1 selected, 38 defined (filter: core/echo: the export)
+exit=0
+```
+
+---
+
+## Slice 39 — accessible UI shell
+
+RED
+
+```
+$ node verify.mjs --only 'html/echo'
+FAIL  html/echo: exposes accessible controls, progress and its own live region: needs a labelled section
+
+verify: 0 passed, 1 failed, 1 selected, 39 defined (filter: html/echo)
+exit=1
+```
+
+The first GREEN attempt failed on the check itself rather than the markup — the
+button assertion assumed `type` followed `id` in source order:
+
+```
+$ node verify.mjs --only 'html/echo'
+FAIL  html/echo: exposes accessible controls, progress and its own live region: echo-run needs type="button"
+```
+
+GREEN — added the `echo-heading` section with real `<button>` controls, a
+labelled `<progress>`, a labelled checkbox that ships unchecked, its own
+`role="status" aria-live="polite"` region, and a description list naming all
+four outcomes; the button assertion was made attribute-order independent.
+
+```
+$ node verify.mjs --only 'html/echo'
+PASS  html/echo: exposes accessible controls, progress and its own live region
+
+verify: 1 passed, 0 failed, 1 selected, 39 defined (filter: html/echo)
+exit=0
+```
+
+---
+
+## Slice 40 — orchestration, in-memory boundary, cancellation
+
+RED
+
+```
+$ node verify.mjs --only 'html/echo: repeats'
+FAIL  html/echo: repeats the existing probe path, in memory only, and cancels a cleared run: the echo-test code must be delimited so it can be audited
+
+verify: 0 passed, 1 failed, 1 selected, 40 defined (filter: html/echo: repeats)
+exit=1
+```
+
+GREEN — the staged scan's probe loop was extracted into a single
+`collectObservations()` helper with `onStart` / `onDone` / `cancelled` hooks, so
+the experiment reuses the one collection path instead of duplicating a probe.
+The delimited `echo test` region holds `echoEls`, one module-scope
+`echoState = { runs: null, summary: null }`, an `echoRunId` generation,
+`discardEcho()`, `runEchoTest()`, `clearEcho()`, `exportEcho()` and the
+renderers. The region contains no persistence or networking API at all; a
+cancelled run abandons itself at a guard before the commit, so it cannot
+repopulate state, render, or unlock the export.
+
+```
+$ node verify.mjs --only 'html/echo: repeats'
+PASS  html/echo: repeats the existing probe path, in memory only, and cancels a cleared run
+
+verify: 1 passed, 0 failed, 1 selected, 40 defined (filter: html/echo: repeats)
+exit=0
+```
+
+---
+
+## Slice 41 — documentation
+
+RED
+
+```
+$ node verify.mjs --only 'readme/echo'
+FAIL  readme/echo: documents the experiment, its classifications and its limits: README needs an "Echo Test" section
+
+verify: 0 passed, 1 failed, 1 selected, 41 defined (filter: readme/echo)
+exit=1
+```
+
+GREEN — added the `## Echo Test` section (workflow, classification table with
+codes and labels, the precedence rule, the privacy boundary for the experiment,
+the export semantics and the honest limits), the four new rows in the Controls
+table, the echo line in the Privacy boundary, and the two new structural gates
+in Verification. The gate derives the run count, the four codes, the four
+labels, the removed keys and both file names from `core.mjs`, so the prose
+cannot drift.
+
+```
+$ node verify.mjs --only 'readme/'
+PASS  readme/docs: documents every probe, weight, cap and boundary truthfully
+PASS  readme/mirror: documents the workflow, bound, schema and honest limits
+PASS  readme/echo: documents the experiment, its classifications and its limits
+
+verify: 3 passed, 0 failed, 3 selected, 41 defined (filter: readme/)
+exit=0
+```
+
+---
+
+## Behavioural verification of the shipped page
+
+The structural gates prove what the source does not contain. To prove the page
+actually behaves, the inline module was extracted and executed against a
+throwaway minimal DOM stub (created outside the repository and deleted
+afterwards), driving the real controls through their real listeners:
+
+```
+scan: Done. 10 of 14 probes returned a reading. 58 of 88 points, Elevated surface.
+echo: Echo test complete. 3 runs · 10 of 14 signals identical every time · 0 whose reading changed.
+headline: 10 of 14 signals answered identically in all 3 runs
+redacted export ok: intermittent,stable,unavailable,variable
+opted-in export ok, warning present
+clear: Cleared. Every recorded run was discarded from this tab's memory, and any run still in progress was cancelled.
+cancellation ok, stored keys: glasshouse.snapshot.v1
+rerun after cancellation ok
+varying: Echo test complete. 3 runs · 9 of 14 signals identical every time · 1 whose reading changed.
+variable classification reached the page and the file
+
+harness: all assertions passed
+```
+
+What that run asserted, beyond the static gates:
+
+- three runs complete, progress reaches 100, and the export unlocks only then;
+- the redacted file contains no reading (the stub's user agent string is absent)
+  and marks all 14 signals `valuesOmitted`;
+- the opted-in file contains the readings and the `valuesWarning`;
+- **Clear echo test** empties the result region, resets progress and the opt-in,
+  and withdraws the export;
+- pressing Clear part-way through a run leaves the experiment silent: no render,
+  no further status message, and the export stays disabled when the in-flight
+  pass finishes;
+- after a cancelled run, only `glasshouse.snapshot.v1` exists in local storage —
+  the experiment persisted nothing of its own — and a fresh run still works;
+- a reading made to vary between runs is classified `variable` with three
+  distinct readings, and that reaches both the status line and the saved file.
+
+A follow-up refactor made the five-column category tally a horizontally
+scrollable, keyboard-reachable `role="region"` with an `aria-label`, because five
+columns cannot fit a 360px viewport without clipping. The harness was re-run
+against the changed render path and confirmed the region, its label, its
+`tabindex` and the table inside it:
+
+```
+tally region ok: Echo test outcomes by category
+both exports ok
+cancellation ok, stored keys: glasshouse.snapshot.v1
+varying: Echo test complete. 3 runs · 9 of 14 signals identical every time · 1 whose reading changed.
+
+harness: all assertions passed
+```
+
+---
+
+## Final verification
+
+```
+$ node verify.mjs
+... 41 PASS ...
+verify: 41 passed, 0 failed, 41 selected, 41 defined
+exit=0
+
+$ node --check core.mjs
+$ node --check verify.mjs
+$ git diff --check
+```
+
+## Independent truthfulness slice — immediate runs are not future proof
+
+Hermes independently found that the initial Stable explanation went beyond the
+experiment: three runs a few seconds apart were described as evidence that a
+signal could be read and recognised later. The README already denied that claim,
+but the core label and visible panel did not.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+FAIL  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable: stable must describe only this immediate experiment, not future recognition
+
+$ node verify.mjs --only 'html/echo: exposes'
+FAIL  html/echo: exposes accessible controls, progress and its own live region: three immediate runs must not be presented as proof of later recognition
+```
+
+GREEN — Stable now means only that readings matched within this experiment, and
+the panel states explicitly that a restart, update or settings change can alter
+the result:
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+PASS  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable
+
+$ node verify.mjs --only 'html/echo: exposes'
+PASS  html/echo: exposes accessible controls, progress and its own live region
+```
+
+## Real rendered Chromium closure
+
+Hermes then exercised the actual page—not a DOM stub—in Playwright Chromium at
+`1440×1000` desktop and `390×844` mobile viewports. Both runs verified:
+
+- Clear during Run 1 cancels the experiment, leaves the result empty and keeps
+  export disabled;
+- a complete three-run experiment renders all 14 signal classifications and the
+  category counts sum to 14;
+- redacted download removes every `values` and `displays` key;
+- explicit checkbox consent produces an exact-values download with its warning;
+- local storage is byte-for-byte unchanged across the experiment;
+- only `/` and `/core.mjs` are requested, with no page errors or failed requests;
+- document width equals viewport width (`1440/1440`, `390/390`), and screenshots
+  show no material clipping, overlap or broken responsive layout.
+
+## Independent review slice — partial values and all outcome transitions
+
+The first v1.2 review also found two mismatches between the classifier and its
+published metadata:
+
+1. global exact-value copy said every run held a reading even though blocked,
+   unsupported and failed outcomes intentionally have no value; and
+2. the classifier treated every status transition as Intermittent, while the
+   visible definition described only readable-to-non-readable transitions.
+
+The intended contract is the classifier's minimum-sufficient behavior: any move
+among exposed, blocked, error or unsupported states is Intermittent. Exact-value
+availability means only that at least one exact reading exists somewhere in the
+experiment.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+FAIL  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable: the published definition must include non-readable outcome transitions
+
+$ node verify.mjs --only 'core/echo: derives'
+FAIL  core/echo: derives category summaries and totals in catalog order: global metadata must not claim partial readings exist for every run
+
+$ node verify.mjs --only 'core/echo: the export'
+FAIL  core/echo: the export omits exact values unless opted in: The input was expected to not match the regular expression /can be shown|(?:each|every) run/i.
+
+$ node verify.mjs --only 'html/echo: exposes'
+FAIL  html/echo: exposes accessible controls, progress and its own live region: the panel must describe partial readings and all outcome transitions truthfully
+```
+
+A second focused RED caught the same overstatement in dynamic save/checkbox
+status messages, not only in the static panel:
+
+```
+$ node verify.mjs --only 'html/echo: exposes'
+FAIL  html/echo: exposes accessible controls, progress and its own live region: no ECHO copy may claim blocked or failed outcomes produced exact readings
+```
+
+GREEN:
+
+```
+$ node verify.mjs --only 'core/echo: classifies'
+PASS  core/echo: classifies repeated readings as stable, variable, intermittent or unavailable
+$ node verify.mjs --only 'core/echo: derives'
+PASS  core/echo: derives category summaries and totals in catalog order
+$ node verify.mjs --only 'core/echo: the export'
+PASS  core/echo: the export omits exact values unless opted in
+$ node verify.mjs --only 'html/echo: exposes'
+PASS  html/echo: exposes accessible controls, progress and its own live region
+$ node verify.mjs --only 'readme/echo'
+PASS  readme/echo: documents the experiment, its classifications and its limits
+
+$ node verify.mjs
+verify: 41 passed, 0 failed, 41 selected, 41 defined
+```
+
+## Final review slice — opted-in warning for partial readings
+
+The next exact-byte review found one remaining sentence with the same partial-value
+overclaim: the opted-in export warning said each run produced a reading even
+though a run may be blocked, unsupported or fail.
+
+RED:
+
+```
+$ node verify.mjs --only 'core/echo: the export'
+FAIL  core/echo: the export omits exact values unless opted in: the warning must not claim blocked or failed outcomes produced values
+```
+
+GREEN — the warning now says that the file contains all exact readings that the
+runs returned, without claiming non-readable outcomes produced values:
+
+```
+$ node verify.mjs --only 'core/echo: the export'
+PASS  core/echo: the export omits exact values unless opted in
+
+$ node verify.mjs
+verify: 41 passed, 0 failed, 41 selected, 41 defined
+```

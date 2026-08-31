@@ -1470,3 +1470,284 @@ export function buildComparisonExport(comparison, options = {}) {
     summary: { ...comparison.summary },
   };
 }
+
+/* ---------------------------------------------------------------------------
+   ECHO TEST: repeating the same fixed probe set several times in one session,
+   then reporting per signal whether the answers held still.
+
+   This is a repeatability experiment, not a new probe and not a new claim. All
+   of it is pure: snapshots in, one classification per catalog signal out. The
+   caller owns the snapshots, and nothing here persists or transmits anything.
+   --------------------------------------------------------------------------- */
+
+export const ECHO_VERSION = 1;
+
+/** The default experiment: three sequential runs of the existing probe set. */
+export const ECHO_RUN_COUNT = 3;
+
+/**
+ * The four honest outcomes of a repeated read. Published as data so the
+ * interface, the export and the README all quote the same definitions.
+ */
+export const ECHO_STABILITY = Object.freeze({
+  stable: Object.freeze({
+    id: 'stable',
+    label: 'Stable',
+    summary:
+      'At least two runs returned a reading, every reading was identical, and the outcome never changed within this experiment.',
+  }),
+  variable: Object.freeze({
+    id: 'variable',
+    label: 'Variable',
+    summary:
+      'At least two runs returned a reading and at least one differed from another, with no change of outcome. Some browsers deliberately vary these answers.',
+  }),
+  intermittent: Object.freeze({
+    id: 'intermittent',
+    label: 'Intermittent',
+    summary:
+      'The outcome itself changed between runs — any transition among readable, blocked, unsupported or failing — so the probe did not behave the same way each time.',
+  }),
+  unavailable: Object.freeze({
+    id: 'unavailable',
+    label: 'Not enough evidence',
+    summary:
+      'Fewer than two runs returned a reading and the outcome never changed, so there was nothing to compare one run against another.',
+  }),
+});
+
+export const ECHO_STABILITY_IDS = Object.freeze(Object.keys(ECHO_STABILITY));
+
+/**
+ * What an ECHO TEST does and does not claim. Printed verbatim in the interface
+ * and in the exported file.
+ */
+export const ECHO_SEMANTICS =
+  'A local experiment that repeats the same fixed probe set several times in this browser, in one ' +
+  'session, and reports whether each signal answered the same way each time. It describes the ' +
+  'repeatability of these probes on this device only. It is not a measure of how distinctive or ' +
+  'recognisable you are, it does not estimate anything, and it makes no promise about what any ' +
+  'other page can read. A reading that varies is often a browser defence working rather than a fault.';
+
+const ECHO_VALUES_AVAILABLE =
+  'At least one signal returned an exact normalised reading. The per-run readings that exist are ' +
+  'held in memory and can be shown or exported; blocked, unsupported and failed outcomes have no value.';
+
+const ECHO_VALUES_UNAVAILABLE =
+  'No run returned a reading, so there are no exact values to show or export at all.';
+
+/** A status placeholder for a run whose snapshot never mentioned the probe. */
+const ECHO_ABSENT_STATUS = 'absent';
+
+/**
+ * Classify one probe across several runs.
+ *
+ * Precedence is deliberate and published: a status transition is reported as
+ * `intermittent` whatever the values did, because a probe that answers once and
+ * refuses later cannot be relied on in either direction.
+ */
+function classifyEchoReadings(probe, readings, runCount) {
+  const statuses = readings.map((reading) =>
+    reading && typeof reading.status === 'string' ? reading.status : ECHO_ABSENT_STATUS,
+  );
+  const statusChanged = new Set(statuses).size > 1;
+
+  const successful = readings.filter((reading) => reading && reading.status === 'ok');
+  const okCount = successful.length;
+  const serialized = successful.map((reading) => stableStringify(reading.value ?? null));
+  const distinctReadings = new Set(serialized).size;
+
+  let stability;
+  if (statusChanged) stability = 'intermittent';
+  else if (okCount >= 2) stability = distinctReadings === 1 ? 'stable' : 'variable';
+  else stability = 'unavailable';
+
+  return {
+    id: probe.id,
+    label: probe.label,
+    category: probe.category,
+    kind: probe.kind,
+    weight: probe.weight,
+    runCount,
+    stability,
+    stabilityLabel: ECHO_STABILITY[stability].label,
+    statuses,
+    statusChanged,
+    okCount,
+    distinctReadings,
+    valuesChanged: distinctReadings > 1,
+    evidence: echoEvidence(stability, runCount, okCount, statuses, distinctReadings),
+    values: readings.map((reading) =>
+      reading && reading.status === 'ok' ? (reading.value ?? null) : null,
+    ),
+    displays: readings.map((reading) =>
+      reading && typeof reading.display === 'string' ? reading.display : null,
+    ),
+  };
+}
+
+/** One plain-language sentence per classification, derived from counts only. */
+function echoEvidence(stability, runCount, okCount, statuses, distinctReadings) {
+  if (stability === 'intermittent') {
+    return `The outcome changed across the ${runCount} runs (${statuses.join(' then ')}), so this probe did not answer the same way each time.`;
+  }
+  if (stability === 'stable') {
+    return `Read in ${okCount} of ${runCount} runs, and all ${okCount} readings were identical.`;
+  }
+  if (stability === 'variable') {
+    return `Read in ${okCount} of ${runCount} runs, and those readings held ${distinctReadings} different values.`;
+  }
+  if (okCount === 0) {
+    return `No run returned a reading — the outcome was "${statuses[0]}" every time — so there was nothing to compare.`;
+  }
+  return `Only ${okCount} of ${runCount} runs returned a reading, which is not enough to compare one run against another.`;
+}
+
+/**
+ * Summarize several snapshots of the same probe set into one classification per
+ * catalog signal, in catalog order.
+ *
+ * @param {Array<{signals: Array<object>}>} runs snapshots, oldest first
+ */
+export function summarizeEchoRuns(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    throw new TypeError('echo runs must be a non-empty array of snapshots');
+  }
+  for (const run of runs) {
+    if (!run || typeof run !== 'object' || !Array.isArray(run.signals)) {
+      throw new TypeError('every echo run must be a snapshot with a signals array');
+    }
+  }
+
+  const runCount = runs.length;
+  const byRun = runs.map((run) => new Map(run.signals.map((signal) => [signal && signal.id, signal])));
+
+  const signals = PROBE_CATALOG.map((probe) =>
+    classifyEchoReadings(
+      probe,
+      byRun.map((lookup) => lookup.get(probe.id) ?? null),
+      runCount,
+    ),
+  );
+
+  const tally = (members) => {
+    const counts = {};
+    for (const id of ECHO_STABILITY_IDS) {
+      counts[id] = members.filter((signal) => signal.stability === id).length;
+    }
+    return counts;
+  };
+
+  const categories = Object.entries(CATEGORIES).map(([id, category]) => {
+    const members = signals.filter((signal) => signal.category === id);
+    return {
+      id,
+      label: category.label,
+      signalCount: members.length,
+      counts: tally(members),
+    };
+  });
+
+  const available = signals.some((signal) => signal.okCount > 0);
+
+  return {
+    echoVersion: ECHO_VERSION,
+    runCount,
+    exactValues: {
+      available,
+      reason: available ? ECHO_VALUES_AVAILABLE : ECHO_VALUES_UNAVAILABLE,
+    },
+    signals,
+    categories,
+    summary: {
+      probeCount: signals.length,
+      runCount,
+      counts: tally(signals),
+      changedCount: signals.filter((signal) => signal.valuesChanged).length,
+    },
+    semantics: ECHO_SEMANTICS,
+  };
+}
+
+/** The keys a redacted ECHO export removes outright. */
+export const ECHO_REDACTED_KEYS = Object.freeze(['values', 'displays']);
+
+const ECHO_OMITTED_NOTE =
+  'The exact per-run readings were deliberately omitted from this export. How each signal behaved ' +
+  '— its classification, its outcome in every run, and whether the reading changed — is kept so ' +
+  'the experiment stays auditable without describing this device.';
+
+const ECHO_NOTHING_TO_OMIT_NOTE =
+  'There are no exact values in this export because no run returned a reading. Every ' +
+  'classification below is derived from outcomes alone.';
+
+const ECHO_VALUES_WARNING =
+  'This file contains all exact normalised readings that the runs returned, so it may reveal details ' +
+  'about this device and this browser. Treat it as you would any other description of your ' +
+  'machine, and prefer the redacted export if you intend to share it.';
+
+/**
+ * Build the exportable ECHO TEST file.
+ *
+ * Exact per-run readings are included only when the caller passes literal
+ * `true` and the experiment actually recorded a reading. Otherwise the two
+ * value keys are removed from every signal and the omission is declared.
+ *
+ * @param {object} echo result of summarizeEchoRuns()
+ * @param {{includeExactValues?: boolean}} [options]
+ */
+export function buildEchoExport(echo, options = {}) {
+  if (
+    !echo ||
+    typeof echo !== 'object' ||
+    !Array.isArray(echo.signals) ||
+    !Array.isArray(echo.categories) ||
+    !echo.exactValues
+  ) {
+    throw new TypeError('buildEchoExport needs an echo summary from summarizeEchoRuns');
+  }
+
+  const available = echo.exactValues.available === true;
+  const includesExactValues = options.includeExactValues === true && available;
+
+  return {
+    app: 'GLASSHOUSE',
+    kind: 'echo-test',
+    echoVersion: echo.echoVersion,
+    runCount: echo.runCount,
+    includesExactValues,
+    redaction: {
+      applied: !includesExactValues,
+      removedKeys: includesExactValues ? [] : [...ECHO_REDACTED_KEYS],
+      note: includesExactValues
+        ? 'The exact per-run readings are included at your request.'
+        : available
+          ? ECHO_OMITTED_NOTE
+          : ECHO_NOTHING_TO_OMIT_NOTE,
+    },
+    notice:
+      'Generated locally in the browser by repeating this page\u2019s own probe set. Nothing in this ' +
+      'file was uploaded, transmitted or stored by GLASSHOUSE.',
+    valuesWarning: includesExactValues ? ECHO_VALUES_WARNING : null,
+    semantics: echo.semantics,
+    exactValues: {
+      available,
+      included: includesExactValues,
+      reason: includesExactValues
+        ? echo.exactValues.reason
+        : available
+          ? 'At least one exact normalised reading was available, but all per-run readings were deliberately omitted from this export.'
+          : echo.exactValues.reason,
+    },
+    summary: { ...echo.summary, counts: { ...echo.summary.counts } },
+    categories: echo.categories.map((category) => ({
+      ...category,
+      counts: { ...category.counts },
+    })),
+    signals: echo.signals.map((signal) => {
+      if (includesExactValues) return { ...signal };
+      const { values, displays, ...rest } = signal;
+      return { ...rest, valuesOmitted: true };
+    }),
+  };
+}
